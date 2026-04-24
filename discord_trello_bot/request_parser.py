@@ -20,7 +20,7 @@ GENERIC_COMMAND_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 CARD_KEYWORD_PATTERN = re.compile(r"\bcard\b", re.IGNORECASE)
 BOT_COMMAND_PATTERN = re.compile(
-    r"<@!?\d+>|(?:\b(?:cri(?:e|ar|a)|ger(?:e|ar|a)|faca|adicion(?:e|ar|a)|abra)\b.*\bcard\b)",
+    r"<@!?\d+>|<@&\d+>|(?:\b(?:cri(?:e|ar|a)|ger(?:e|ar|a)|faca|adicion(?:e|ar|a)|abra)\b.*\bcard\b)",
     re.IGNORECASE,
 )
 
@@ -163,6 +163,7 @@ class RequestParser:
 
 def _normalize_instruction(text: str, bot_user_id: str) -> str:
     text = text.replace(f"<@{bot_user_id}>", " ").replace(f"<@!{bot_user_id}>", " ")
+    text = re.sub(r"<@&\d+>", " ", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{2,}", "\n", text)
@@ -279,7 +280,7 @@ def _pick_source_summary(context_messages: list[DiscordMessage]) -> str:
 
 
 def _compact_text(text: str, *, limit: int) -> str:
-    text = re.sub(r"<@!?\d+>", "", text)
+    text = re.sub(r"<@!?\d+>|<@&\d+>", "", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = [line.strip(" -*\t") for line in text.splitlines() if line.strip()]
     if not lines:
@@ -305,7 +306,7 @@ def _build_context_excerpt(context_messages: list[DiscordMessage]) -> str:
 
 
 def _compact_multiline(text: str, *, limit: int) -> str:
-    text = re.sub(r"<@!?\d+>", "", text)
+    text = re.sub(r"<@!?\d+>|<@&\d+>", "", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     compact = " | ".join(line.strip() for line in text.splitlines() if line.strip())
     compact = re.sub(r"\s{2,}", " ", compact).strip(" ,")
@@ -462,7 +463,7 @@ def _is_low_signal(text: str) -> bool:
 
 def _topic_terms(text: str) -> set[str]:
     compact = _compact_multiline(text, limit=400)
-    compact = re.sub(r"<@!?\d+>", " ", compact)
+    compact = re.sub(r"<@!?\d+>|<@&\d+>", " ", compact)
     compact = re.sub(r"https?://\S+", " ", compact)
     compact = _strip_accents(compact.lower())
     terms = set(re.findall(r"[a-z0-9]{3,}", compact))

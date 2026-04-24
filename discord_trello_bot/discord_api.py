@@ -25,6 +25,7 @@ class DiscordApiClient(JsonApiClient):
         )
         self.settings = settings
         self._current_user_id: str | None = None
+        self._current_member_role_ids: tuple[str, ...] | None = None
 
     def list_channel_messages(
         self,
@@ -88,6 +89,15 @@ class DiscordApiClient(JsonApiClient):
             payload = self.request("GET", "users/@me")
             self._current_user_id = str(payload["id"])
         return self._current_user_id
+
+    def get_current_member_role_ids(self) -> tuple[str, ...]:
+        if self._current_member_role_ids is None:
+            user_id = self.get_current_user_id()
+            payload = self.request("GET", f"guilds/{self.settings.discord_guild_id}/members/{user_id}")
+            self._current_member_role_ids = tuple(
+                str(role_id) for role_id in payload.get("roles", []) if role_id is not None
+            )
+        return self._current_member_role_ids
 
     def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
         encoded_emoji = quote(emoji, safe="")

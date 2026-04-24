@@ -30,6 +30,11 @@ class DiscordTrelloService:
         cutoff = datetime.now(tz=self.settings.timezone) - timedelta(days=self.settings.lookback_days)
         channel_modes = self._build_channel_modes()
         bot_user_id = self.discord.get_current_user_id() if self.settings.discord_request_channel_ids else None
+        bot_role_ids = (
+            set(self.discord.get_current_member_role_ids())
+            if self.settings.discord_request_channel_ids
+            else set()
+        )
 
         for channel_id, modes in channel_modes.items():
             summary.channels_scanned += 1
@@ -56,6 +61,7 @@ class DiscordTrelloService:
                     bot_reply_reference_ids=bot_reply_reference_ids,
                     modes=modes,
                     bot_user_id=bot_user_id,
+                    bot_role_ids=bot_role_ids,
                 )
 
                 if outcome == "already_confirmed":
@@ -78,6 +84,7 @@ class DiscordTrelloService:
         bot_reply_reference_ids: set[str],
         modes: set[str],
         bot_user_id: str | None,
+        bot_role_ids: set[str],
     ) -> tuple[str, int]:
         if not self._should_consider_message(message):
             return "skipped", 0
@@ -94,6 +101,7 @@ class DiscordTrelloService:
                 message,
                 channel_messages=channel_messages,
                 bot_user_id=bot_user_id,
+                bot_role_ids=bot_role_ids,
             )
             if request_outcome is not None:
                 return request_outcome
@@ -156,10 +164,11 @@ class DiscordTrelloService:
         *,
         channel_messages: list[DiscordMessage],
         bot_user_id: str | None,
+        bot_role_ids: set[str],
     ) -> tuple[str, int] | None:
         if bot_user_id is None:
             return None
-        if not message.mentions_user(bot_user_id):
+        if not message.mentions_user(bot_user_id) and not message.mentions_any_role(bot_role_ids):
             return None
 
         try:

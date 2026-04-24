@@ -42,6 +42,7 @@ def build_message(
     author_is_bot: bool = False,
     referenced_message_id: str | None = None,
     mentioned_user_ids: tuple[str, ...] = (),
+    mentioned_role_ids: tuple[str, ...] = (),
     hour: int = 10,
     minute: int = 0,
 ) -> DiscordMessage:
@@ -58,6 +59,7 @@ def build_message(
         referenced_channel_id=channel_id,
         referenced_message_id=referenced_message_id,
         mentioned_user_ids=mentioned_user_ids,
+        mentioned_role_ids=mentioned_role_ids,
         reactions=(),
     )
 
@@ -76,6 +78,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
             bot_reply_reference_ids={message.id},
             modes={"structured"},
             bot_user_id=None,
+            bot_role_ids=set(),
         )
 
         self.assertEqual(outcome, "already_confirmed")
@@ -121,6 +124,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
             bot_reply_reference_ids=set(),
             modes={"request"},
             bot_user_id="bot-1",
+            bot_role_ids=set(),
         )
 
         self.assertEqual(outcome, "created")
@@ -161,6 +165,50 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         )
 
         self.assertEqual([message.id for message in messages], ["old-1", "win-1"])
+
+    def test_create_card_when_bot_role_is_mentioned_in_request_channel(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.parser = Mock()
+        service.request_parser = Mock()
+        service.trello = Mock()
+        service.discord = Mock()
+
+        command_message = build_message(
+            channel_id="request-channel",
+            content="<@&role-1> crie um card sobre isso para segunda feira",
+            referenced_message_id="source-1",
+            mentioned_role_ids=("role-1",),
+        )
+        context_message = build_message(
+            channel_id="request-channel",
+            content="Precisamos revisar o contrato do fornecedor X",
+        )
+        service.discord.get_message.return_value = context_message
+        service.request_parser.parse.return_value = (
+            RequestedCard(
+                title="[Discord] Precisamos revisar o contrato do fornecedor X",
+                due_date=datetime(2026, 4, 27).date(),
+                instruction="crie um card sobre isso para segunda feira",
+                source_excerpt=context_message.content,
+                context_excerpt=f"{context_message.author_name}: {context_message.content}",
+            ),
+            [context_message],
+            None,
+        )
+        service.trello.create_card.return_value = {"id": "card-1", "url": "https://trello/card-1"}
+
+        outcome, created_count = service._process_message(
+            command_message,
+            channel_messages=[context_message, command_message],
+            bot_reply_reference_ids=set(),
+            modes={"request"},
+            bot_user_id="bot-1",
+            bot_role_ids={"role-1"},
+        )
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 1)
+        service.request_parser.parse.assert_called_once()
 
 
 if __name__ == "__main__":

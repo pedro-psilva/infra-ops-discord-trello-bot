@@ -47,6 +47,7 @@ def build_message(content: str) -> DiscordMessage:
         referenced_channel_id=None,
         referenced_message_id=None,
         mentioned_user_ids=(),
+        mentioned_role_ids=(),
         reactions=(),
     )
 

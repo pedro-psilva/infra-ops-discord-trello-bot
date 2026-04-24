@@ -46,6 +46,7 @@ def build_message(
     author_name: str = "Pedro Paulo",
     referenced_message_id: str | None = None,
     mentioned_user_ids: tuple[str, ...] = ("bot-1",),
+    mentioned_role_ids: tuple[str, ...] = (),
 ) -> DiscordMessage:
     return DiscordMessage(
         id=message_id,
@@ -60,6 +61,7 @@ def build_message(
         referenced_channel_id="request-channel",
         referenced_message_id=referenced_message_id,
         mentioned_user_ids=mentioned_user_ids,
+        mentioned_role_ids=mentioned_role_ids,
         reactions=(),
     )
 

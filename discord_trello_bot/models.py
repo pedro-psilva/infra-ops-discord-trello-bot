@@ -44,6 +44,7 @@ class DiscordMessage:
     referenced_channel_id: str | None
     referenced_message_id: str | None
     mentioned_user_ids: tuple[str, ...]
+    mentioned_role_ids: tuple[str, ...]
     reactions: tuple[DiscordReaction, ...]
 
     @classmethod
@@ -53,6 +54,7 @@ class DiscordMessage:
         reactions = tuple(DiscordReaction.from_api(item) for item in payload.get("reactions", []))
         message_reference = payload.get("message_reference") or {}
         mentions = tuple(str(item.get("id")) for item in payload.get("mentions", []) if item.get("id") is not None)
+        mention_roles = tuple(str(item) for item in payload.get("mention_roles", []) if item is not None)
         return cls(
             id=str(payload["id"]),
             channel_id=str(payload["channel_id"]),
@@ -74,6 +76,7 @@ class DiscordMessage:
                 else None
             ),
             mentioned_user_ids=mentions,
+            mentioned_role_ids=mention_roles,
             reactions=reactions,
         )
 
@@ -82,6 +85,9 @@ class DiscordMessage:
 
     def mentions_user(self, user_id: str) -> bool:
         return user_id in self.mentioned_user_ids
+
+    def mentions_any_role(self, role_ids: set[str]) -> bool:
+        return any(role_id in role_ids for role_id in self.mentioned_role_ids)
 
 
 @dataclass(frozen=True)
