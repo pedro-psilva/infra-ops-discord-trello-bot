@@ -189,6 +189,84 @@ class RequestParserTests(unittest.TestCase):
         self.assertIn("VPN", requested_card.context_excerpt)
         self.assertNotIn("Bom dia", requested_card.context_excerpt)
 
+    def test_parse_request_can_use_full_last_hour_when_topic_continues(self) -> None:
+        command_message = build_message(
+            message_id="cmd-4",
+            content="<@bot-1> crie um card sobre isso para quarta",
+            hour=11,
+            minute=0,
+            referenced_message_id="ctx-35",
+        )
+        recent_messages = [
+            build_message(
+                message_id="ctx-30",
+                content="Chamado da VPN da Julia segue aberto.",
+                hour=10,
+                minute=2,
+                author_id="author-2",
+                author_name="Bianca Oliveira",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-31",
+                content="Ela ainda nao consegue autenticar no notebook novo.",
+                hour=10,
+                minute=10,
+                author_name="Pedro Paulo",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-32",
+                content="O erro continua mesmo apos resetar a senha.",
+                hour=10,
+                minute=18,
+                author_id="author-2",
+                author_name="Bianca Oliveira",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-33",
+                content="Tambem precisamos validar o cliente da VPN no equipamento.",
+                hour=10,
+                minute=29,
+                author_name="Pedro Paulo",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-34",
+                content="Vou pegar os logs e anexar no atendimento.",
+                hour=10,
+                minute=41,
+                author_id="author-2",
+                author_name="Bianca Oliveira",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-35",
+                content="Se nao normalizar hoje, precisamos abrir tratativa com o fornecedor.",
+                hour=10,
+                minute=52,
+                author_name="Pedro Paulo",
+                mentioned_user_ids=(),
+            ),
+        ]
+
+        requested_card, selected_context_messages, reason = self.parser.parse(
+            command_message=command_message,
+            bot_user_id="bot-1",
+            recent_channel_messages=recent_messages,
+            reply_chain_messages=[recent_messages[-1]],
+        )
+
+        self.assertIsNone(reason)
+        assert requested_card is not None
+        self.assertEqual(
+            [message.id for message in selected_context_messages],
+            ["ctx-30", "ctx-31", "ctx-32", "ctx-33", "ctx-34", "ctx-35"],
+        )
+        self.assertIn("tratativa com o fornecedor", requested_card.context_excerpt)
+        self.assertIn("cliente da VPN", requested_card.context_excerpt)
+
     def test_skip_when_mention_is_not_a_card_request(self) -> None:
         command_message = build_message(
             message_id="cmd-3",

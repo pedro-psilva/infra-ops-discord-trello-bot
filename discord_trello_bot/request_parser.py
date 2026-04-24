@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from dateparser.search import search_dates
 
@@ -102,9 +102,10 @@ TOPIC_STOPWORDS = {
     "vai",
 }
 
-MAX_CONTEXT_MESSAGES = 12
+MAX_CONTEXT_MESSAGES = 30
 SHORT_GAP_MINUTES = 20
 LONG_GAP_MINUTES = 90
+MIN_ANALYSIS_WINDOW = timedelta(hours=1)
 
 
 class RequestParser:
@@ -320,28 +321,27 @@ def _select_context_messages(
     reply_chain_messages: list[DiscordMessage],
     timezone,
 ) -> list[DiscordMessage]:
-    day_start = command_message.timestamp.astimezone(timezone).replace(
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-    recent_same_day_messages = [
+    minimum_window_start = command_message.timestamp.astimezone(timezone) - MIN_ANALYSIS_WINDOW
+    recent_window_messages = [
         message
         for message in recent_channel_messages
         if message.id != command_message.id
         and message.timestamp < command_message.timestamp
-        and message.timestamp.astimezone(timezone) >= day_start
         and _is_context_candidate(message)
     ]
-    ordered_messages = _merge_messages(recent_same_day_messages, reply_chain_messages)
+    ordered_messages = _merge_messages(recent_window_messages, reply_chain_messages)
     if not ordered_messages:
         return []
 
     if reply_chain_messages:
         selected_messages = [message for message in reply_chain_messages if _is_context_candidate(message)]
     else:
-        selected_messages = [ordered_messages[-1]]
+        last_hour_messages = [
+            message
+            for message in ordered_messages
+            if message.timestamp.astimezone(timezone) >= minimum_window_start
+        ]
+        selected_messages = [last_hour_messages[-1] if last_hour_messages else ordered_messages[-1]]
     if not selected_messages:
         return []
 

@@ -18,7 +18,7 @@ Para ficar o mais perto possivel de custo zero, o projeto foi estruturado para r
    - adiciona um comentario com resumo, observacoes detectadas e link da mensagem no Discord
    - reage com `✅` na mensagem
 5. Nos canais de pedido por mencao, quando alguem responde uma mensagem com algo como `@Bot, crie um card sobre isso para segunda feira`, o bot:
-   - le a cadeia da mensagem respondida e as mensagens recentes do mesmo dia no canal
+   - le a cadeia da mensagem respondida e, no minimo, todas as mensagens dos ultimos 60 minutos antes do pedido
    - recorta automaticamente onde o assunto comeca e termina com base em proximidade temporal, participantes e termos em comum
    - interpreta o prazo pedido
    - cria um card generico na lista de destino do Trello

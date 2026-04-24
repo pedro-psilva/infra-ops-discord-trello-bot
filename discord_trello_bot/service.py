@@ -294,6 +294,7 @@ class DiscordTrelloService:
         lines = [
             "Origem no Discord:",
             f"- Pedido: {command_url}",
+            "- Janela avaliada: ultimos 60 minutos antes do pedido",
             "",
             "Resumo interpretado:",
             f"- Titulo: {requested_card.title}",

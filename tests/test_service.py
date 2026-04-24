@@ -36,17 +36,20 @@ def build_settings() -> Settings:
 
 def build_message(
     *,
+    message_id: str = "123",
     channel_id: str = "456",
     content: str = "Onboarding\nNome: Maria Silva\nData: 22/04/2026",
     author_is_bot: bool = False,
     referenced_message_id: str | None = None,
     mentioned_user_ids: tuple[str, ...] = (),
+    hour: int = 10,
+    minute: int = 0,
 ) -> DiscordMessage:
     return DiscordMessage(
-        id="123",
+        id=message_id,
         channel_id=channel_id,
         content=content,
-        timestamp=datetime(2026, 4, 24, 10, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+        timestamp=datetime(2026, 4, 24, hour, minute, tzinfo=ZoneInfo("America/Sao_Paulo")),
         author_id="789",
         author_name="RH",
         author_is_bot=author_is_bot,
@@ -127,6 +130,37 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.trello.add_comment.assert_called_once()
         service.discord.add_reaction.assert_called_once()
         service.discord.reply_to_message.assert_called_once()
+
+    def test_recent_request_context_loads_messages_from_same_day(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        command_message = build_message(
+            message_id="cmd-1",
+            channel_id="request-channel",
+            content="<@bot> crie um card sobre isso",
+            hour=11,
+            minute=0,
+        )
+        older_message = build_message(
+            message_id="old-1",
+            channel_id="request-channel",
+            content="Assunto antigo",
+            hour=9,
+            minute=40,
+        )
+        in_window_message = build_message(
+            message_id="win-1",
+            channel_id="request-channel",
+            content="Assunto ainda recente",
+            hour=10,
+            minute=15,
+        )
+
+        messages = service._load_recent_request_messages(
+            command_message=command_message,
+            channel_messages=[older_message, in_window_message, command_message],
+        )
+
+        self.assertEqual([message.id for message in messages], ["old-1", "win-1"])
 
 
 if __name__ == "__main__":
