@@ -52,6 +52,7 @@ class DiscordTrelloService:
                 summary.messages_scanned += 1
                 outcome, created_count = self._process_message(
                     message,
+                    channel_messages=messages,
                     bot_reply_reference_ids=bot_reply_reference_ids,
                     modes=modes,
                     bot_user_id=bot_user_id,
@@ -73,6 +74,7 @@ class DiscordTrelloService:
         self,
         message: DiscordMessage,
         *,
+        channel_messages: list[DiscordMessage],
         bot_reply_reference_ids: set[str],
         modes: set[str],
         bot_user_id: str | None,
@@ -90,6 +92,7 @@ class DiscordTrelloService:
         if "request" in modes:
             request_outcome = self._process_request_message(
                 message,
+                channel_messages=channel_messages,
                 bot_user_id=bot_user_id,
             )
             if request_outcome is not None:
@@ -151,25 +154,28 @@ class DiscordTrelloService:
         self,
         message: DiscordMessage,
         *,
+        channel_messages: list[DiscordMessage],
         bot_user_id: str | None,
     ) -> tuple[str, int] | None:
         if bot_user_id is None:
             return None
         if not message.mentions_user(bot_user_id):
             return None
-        if not message.referenced_message_id:
-            LOGGER.info("Mensagem %s ignorada: pedido com mencao sem resposta a outra mensagem.", message.id)
-            return "skipped", 0
 
         try:
-            context_messages = self._load_context_messages(message)
+            recent_channel_messages = self._load_recent_request_messages(
+                command_message=message,
+                channel_messages=channel_messages,
+            )
+            context_messages = self._load_reply_chain_messages(message)
         except ApiError:
             LOGGER.exception("Falha ao carregar contexto da mensagem %s.", message.id)
             return "error", 0
-        requested_card, reason = self.request_parser.parse(
+        requested_card, selected_context_messages, reason = self.request_parser.parse(
             command_message=message,
             bot_user_id=bot_user_id,
-            context_messages=context_messages,
+            recent_channel_messages=recent_channel_messages,
+            reply_chain_messages=context_messages,
         )
         if requested_card is None:
             LOGGER.info("Mensagem %s ignorada: %s.", message.id, reason)
@@ -192,7 +198,7 @@ class DiscordTrelloService:
                     requested_card=requested_card,
                     command_message=message,
                     card_url=card_url,
-                    context_messages=context_messages,
+                    context_messages=selected_context_messages,
                 ),
             )
             self.discord.add_reaction(
@@ -285,17 +291,9 @@ class DiscordTrelloService:
             channel_id=command_message.channel_id,
             message_id=command_message.id,
         )
-        source_message = context_messages[-1]
-        source_url = build_discord_message_url(
-            guild_id=self.settings.discord_guild_id,
-            channel_id=source_message.channel_id,
-            message_id=source_message.id,
-        )
-
         lines = [
             "Origem no Discord:",
             f"- Pedido: {command_url}",
-            f"- Mensagem respondida: {source_url}",
             "",
             "Resumo interpretado:",
             f"- Titulo: {requested_card.title}",
@@ -311,6 +309,23 @@ class DiscordTrelloService:
             "",
             f"Card criado: {card_url}",
         ]
+        if context_messages:
+            first_message = context_messages[0]
+            last_message = context_messages[-1]
+            first_url = build_discord_message_url(
+                guild_id=self.settings.discord_guild_id,
+                channel_id=first_message.channel_id,
+                message_id=first_message.id,
+            )
+            last_url = build_discord_message_url(
+                guild_id=self.settings.discord_guild_id,
+                channel_id=last_message.channel_id,
+                message_id=last_message.id,
+            )
+            lines[2:2] = [
+                f"- Inicio do assunto: {first_url}",
+                f"- Fim do assunto: {last_url}",
+            ]
         return "\n".join(lines)
 
     def _build_discord_reply(self, card_urls: list[str]) -> str:
@@ -329,7 +344,27 @@ class DiscordTrelloService:
             channel_modes.setdefault(channel_id, set()).add("request")
         return channel_modes
 
-    def _load_context_messages(self, message: DiscordMessage) -> list[DiscordMessage]:
+    def _load_recent_request_messages(
+        self,
+        *,
+        command_message: DiscordMessage,
+        channel_messages: list[DiscordMessage],
+    ) -> list[DiscordMessage]:
+        local_day_start = command_message.timestamp.astimezone(self.settings.timezone).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        return [
+            message
+            for message in channel_messages
+            if message.id != command_message.id
+            and message.timestamp < command_message.timestamp
+            and message.timestamp.astimezone(self.settings.timezone) >= local_day_start
+        ]
+
+    def _load_reply_chain_messages(self, message: DiscordMessage) -> list[DiscordMessage]:
         context_messages: list[DiscordMessage] = []
         current_channel_id = message.referenced_channel_id or message.channel_id
         current_message_id = message.referenced_message_id

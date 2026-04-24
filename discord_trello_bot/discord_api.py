@@ -39,13 +39,19 @@ class DiscordApiClient(JsonApiClient):
         payload = self.request("GET", f"channels/{channel_id}/messages", params=params)
         return [DiscordMessage.from_api(item) for item in payload]
 
-    def iter_messages_since(self, channel_id: str, cutoff: datetime) -> list[DiscordMessage]:
-        before: str | None = None
+    def iter_messages_since(
+        self,
+        channel_id: str,
+        cutoff: datetime,
+        *,
+        before: str | None = None,
+    ) -> list[DiscordMessage]:
+        current_before = before
         collected: list[DiscordMessage] = []
 
         while len(collected) < self.settings.max_messages_per_channel:
             remaining = self.settings.max_messages_per_channel - len(collected)
-            batch = self.list_channel_messages(channel_id, before=before, limit=min(100, remaining))
+            batch = self.list_channel_messages(channel_id, before=current_before, limit=min(100, remaining))
             if not batch:
                 break
 
@@ -59,7 +65,7 @@ class DiscordApiClient(JsonApiClient):
             if reached_cutoff:
                 break
 
-            before = batch[-1].id
+            current_before = batch[-1].id
             if len(batch) < 100:
                 break
 

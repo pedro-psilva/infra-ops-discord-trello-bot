@@ -69,6 +69,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         message = build_message()
         outcome, created_count = service._process_message(
             message,
+            channel_messages=[message],
             bot_reply_reference_ids={message.id},
             modes={"structured"},
             bot_user_id=None,
@@ -106,12 +107,14 @@ class DiscordTrelloServiceTests(unittest.TestCase):
                 source_excerpt=context_message.content,
                 context_excerpt=f"{context_message.author_name}: {context_message.content}",
             ),
+            [context_message],
             None,
         )
         service.trello.create_card.return_value = {"id": "card-1", "url": "https://trello/card-1"}
 
         outcome, created_count = service._process_message(
             command_message,
+            channel_messages=[context_message, command_message],
             bot_reply_reference_ids=set(),
             modes={"request"},
             bot_user_id="bot-1",
