@@ -42,7 +42,7 @@ O parser e conservador de proposito: se nome ou data nao forem detectados, ele n
 5. Informar:
    - `DISCORD_BOT_TOKEN`
    - `DISCORD_GUILD_ID`
-   - `DISCORD_CHANNEL_IDS`
+   - `DISCORD_CHANNEL_IDS` para canais de scan estruturado
    - `DISCORD_REQUEST_CHANNEL_IDS` se quiser canais dedicados para pedidos por mencao ao bot
 
 ### Trello
@@ -67,7 +67,7 @@ Copie `.env.example` para `.env` quando for rodar localmente.
 | --- | --- | --- |
 | `DISCORD_BOT_TOKEN` | Sim | Token do bot do Discord |
 | `DISCORD_GUILD_ID` | Sim | ID do servidor para montar o link da mensagem |
-| `DISCORD_CHANNEL_IDS` | Sim | IDs dos canais, separados por virgula |
+| `DISCORD_CHANNEL_IDS` | Condicional | IDs dos canais de scan estruturado, separados por virgula |
 | `DISCORD_REQUEST_CHANNEL_IDS` | Nao | IDs dos canais onde o bot atende pedidos via `@Bot` |
 | `DISCORD_CONFIRMATION_MODE` | Nao | `reaction`, `reply` ou `both` |
 | `DISCORD_REACTION_EMOJI` | Nao | Emoji usado para confirmar, padrao `✅` |

@@ -105,6 +105,12 @@ def _confirmation_mode_env() -> ConfirmationMode:
 
 def load_settings(*, lookback_days_override: int | None = None) -> Settings:
     lookback_days = lookback_days_override or _int_env("LOOKBACK_DAYS", 7)
+    discord_channel_ids = _csv_optional_env("DISCORD_CHANNEL_IDS")
+    discord_request_channel_ids = _csv_optional_env("DISCORD_REQUEST_CHANNEL_IDS")
+    if not discord_channel_ids and not discord_request_channel_ids:
+        raise ValueError(
+            "Defina DISCORD_CHANNEL_IDS e/ou DISCORD_REQUEST_CHANNEL_IDS com ao menos um canal."
+        )
     trello_target_list_id = _optional_env("TRELLO_TARGET_LIST_ID")
     trello_target_list_name = _optional_env("TRELLO_TARGET_LIST_NAME")
     trello_board_ref = _optional_env("TRELLO_BOARD_REF")
@@ -115,8 +121,8 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
     return Settings(
         discord_bot_token=_require_env("DISCORD_BOT_TOKEN"),
         discord_guild_id=_require_env("DISCORD_GUILD_ID"),
-        discord_channel_ids=_csv_env("DISCORD_CHANNEL_IDS"),
-        discord_request_channel_ids=_csv_optional_env("DISCORD_REQUEST_CHANNEL_IDS"),
+        discord_channel_ids=discord_channel_ids,
+        discord_request_channel_ids=discord_request_channel_ids,
         discord_confirmation_mode=_confirmation_mode_env(),
         discord_reaction_emoji=os.getenv("DISCORD_REACTION_EMOJI", "✅").strip() or "✅",
         discord_reply_template=os.getenv(
