@@ -107,8 +107,9 @@ A opcao mais simples para este caso e o **GitHub Actions**:
 - nao exige servidor ligado o tempo todo
 - aceita segredos do repositorio
 - o workflow deste projeto ja foi criado em `.github/workflows/daily_scan.yml`
+- para pedidos por mencao ao bot em canal dedicado, existe tambem `.github/workflows/mention_requests.yml`
 
-Assumi como horario padrao **09:17 em `America/Sao_Paulo`**, para evitar o inicio da hora, que a propria documentacao do GitHub diz poder sofrer atraso. Se voce quiser outro horario, basta ajustar o cron do workflow.
+Assumi como horario padrao **09:17 em `America/Sao_Paulo`** para o scan diario. Para pedidos por mencao ao bot, o workflow dedicado roda **a cada 15 minutos**. Se voce quiser outro horario ou outra cadencia, basta ajustar o cron dos workflows.
 
 ## Segredos do GitHub Actions
 
