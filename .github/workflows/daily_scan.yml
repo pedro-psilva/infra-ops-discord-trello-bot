@@ -1,0 +1,49 @@
+name: Daily Discord to Trello
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+      timezone: "America/Sao_Paulo"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          DISCORD_CHANNEL_IDS: ${{ secrets.DISCORD_CHANNEL_IDS }}
+          DISCORD_CONFIRMATION_MODE: ${{ secrets.DISCORD_CONFIRMATION_MODE }}
+          DISCORD_REACTION_EMOJI: ${{ secrets.DISCORD_REACTION_EMOJI }}
+          DISCORD_REPLY_TEMPLATE: ${{ secrets.DISCORD_REPLY_TEMPLATE }}
+          TRELLO_API_KEY: ${{ secrets.TRELLO_API_KEY }}
+          TRELLO_API_TOKEN: ${{ secrets.TRELLO_API_TOKEN }}
+          TRELLO_BOARD_REF: ${{ secrets.TRELLO_BOARD_REF }}
+          TRELLO_TARGET_LIST_ID: ${{ secrets.TRELLO_TARGET_LIST_ID }}
+          TRELLO_TARGET_LIST_NAME: ${{ secrets.TRELLO_TARGET_LIST_NAME }}
+          TRELLO_ONBOARDING_TEMPLATE_CARD_REF: ${{ secrets.TRELLO_ONBOARDING_TEMPLATE_CARD_REF }}
+          TRELLO_OFFBOARDING_TEMPLATE_CARD_REF: ${{ secrets.TRELLO_OFFBOARDING_TEMPLATE_CARD_REF }}
+          TRELLO_KEEP_FROM_SOURCE: ${{ secrets.TRELLO_KEEP_FROM_SOURCE }}
+          BOT_TIMEZONE: ${{ secrets.BOT_TIMEZONE }}
+          LOOKBACK_DAYS: ${{ secrets.LOOKBACK_DAYS }}
+          MAX_MESSAGES_PER_CHANNEL: ${{ secrets.MAX_MESSAGES_PER_CHANNEL }}
+          LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
+        run: python main.py
