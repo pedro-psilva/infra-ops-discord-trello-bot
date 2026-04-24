@@ -1,6 +1,6 @@
 # Bot Discord -> Trello
 
-Bot em Python para ler mensagens de um ou mais canais do Discord, identificar tarefas de onboarding/offboarding, criar cards reais no Trello a partir de templates e confirmar o processamento com `:white_check_mark:` na mensagem.
+Bot em Python para ler mensagens de um ou mais canais do Discord, identificar tarefas de onboarding/offboarding, criar cards reais no Trello a partir de templates, atender pedidos por mencao ao bot e confirmar o processamento com `:white_check_mark:` na mensagem.
 
 ## Arquitetura escolhida
 
@@ -17,7 +17,13 @@ Para ficar o mais perto possivel de custo zero, o projeto foi estruturado para r
    - define a data no card
    - adiciona um comentario com resumo, observacoes detectadas e link da mensagem no Discord
    - reage com `✅` na mensagem
-5. Se estiver configurado `DISCORD_CONFIRMATION_MODE=reply` ou `both`, o bot tambem responde com o link do card.
+5. Nos canais de pedido por mencao, quando alguem responde uma mensagem com algo como `@Bot, crie um card sobre isso para segunda feira`, o bot:
+   - le a cadeia da mensagem respondida
+   - interpreta o prazo pedido
+   - cria um card generico na lista de destino do Trello
+   - adiciona comentario com o pedido e o contexto lido
+   - reage com `✅`
+6. Se estiver configurado `DISCORD_CONFIRMATION_MODE=reply` ou `both`, o bot tambem responde com o link do card.
 
 O parser e conservador de proposito: se nome ou data nao forem detectados, ele nao cria card.
 
@@ -37,6 +43,7 @@ O parser e conservador de proposito: se nome ou data nao forem detectados, ele n
    - `DISCORD_BOT_TOKEN`
    - `DISCORD_GUILD_ID`
    - `DISCORD_CHANNEL_IDS`
+   - `DISCORD_REQUEST_CHANNEL_IDS` se quiser canais dedicados para pedidos por mencao ao bot
 
 ### Trello
 
@@ -61,6 +68,7 @@ Copie `.env.example` para `.env` quando for rodar localmente.
 | `DISCORD_BOT_TOKEN` | Sim | Token do bot do Discord |
 | `DISCORD_GUILD_ID` | Sim | ID do servidor para montar o link da mensagem |
 | `DISCORD_CHANNEL_IDS` | Sim | IDs dos canais, separados por virgula |
+| `DISCORD_REQUEST_CHANNEL_IDS` | Nao | IDs dos canais onde o bot atende pedidos via `@Bot` |
 | `DISCORD_CONFIRMATION_MODE` | Nao | `reaction`, `reply` ou `both` |
 | `DISCORD_REACTION_EMOJI` | Nao | Emoji usado para confirmar, padrao `✅` |
 | `DISCORD_REPLY_TEMPLATE` | Nao | Texto da resposta, com `{card_url}` |
@@ -109,6 +117,7 @@ No repositorio do GitHub, crie os seguintes repository secrets:
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_GUILD_ID`
 - `DISCORD_CHANNEL_IDS`
+- `DISCORD_REQUEST_CHANNEL_IDS`
 - `DISCORD_CONFIRMATION_MODE`
 - `DISCORD_REACTION_EMOJI`
 - `DISCORD_REPLY_TEMPLATE`

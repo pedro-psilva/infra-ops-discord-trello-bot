@@ -17,6 +17,7 @@ class Settings:
     discord_bot_token: str
     discord_guild_id: str
     discord_channel_ids: tuple[str, ...]
+    discord_request_channel_ids: tuple[str, ...]
     discord_confirmation_mode: ConfirmationMode
     discord_reaction_emoji: str
     discord_reply_template: str
@@ -56,6 +57,13 @@ def _csv_env(name: str) -> tuple[str, ...]:
     if not values:
         raise ValueError(f"A variavel de ambiente {name} precisa ter ao menos um valor.")
     return values
+
+
+def _csv_optional_env(name: str) -> tuple[str, ...]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return ()
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
 def _int_env(name: str, default: int) -> int:
@@ -108,6 +116,7 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         discord_bot_token=_require_env("DISCORD_BOT_TOKEN"),
         discord_guild_id=_require_env("DISCORD_GUILD_ID"),
         discord_channel_ids=_csv_env("DISCORD_CHANNEL_IDS"),
+        discord_request_channel_ids=_csv_optional_env("DISCORD_REQUEST_CHANNEL_IDS"),
         discord_confirmation_mode=_confirmation_mode_env(),
         discord_reaction_emoji=os.getenv("DISCORD_REACTION_EMOJI", "✅").strip() or "✅",
         discord_reply_template=os.getenv(

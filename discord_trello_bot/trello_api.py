@@ -42,6 +42,23 @@ class TrelloApiClient(JsonApiClient):
         params = self._with_auth({"text": text})
         return self.request("POST", f"cards/{card_id}/actions/comments", params=params)
 
+    def create_card(
+        self,
+        *,
+        card_name: str,
+        due_iso: str | None = None,
+        desc: str | None = None,
+    ) -> dict:
+        params: dict[str, object] = {
+            "idList": self.resolve_target_list_id(),
+            "name": card_name,
+        }
+        if due_iso is not None:
+            params["due"] = due_iso
+        if desc:
+            params["desc"] = desc
+        return self.request("POST", "cards", params=self._with_auth(params))
+
     def _with_auth(self, params: dict[str, object]) -> dict[str, object]:
         return {
             **params,

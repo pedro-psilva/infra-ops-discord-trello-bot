@@ -14,6 +14,7 @@ def build_settings() -> Settings:
         discord_bot_token="token",
         discord_guild_id="guild",
         discord_channel_ids=("channel",),
+        discord_request_channel_ids=(),
         discord_confirmation_mode=ConfirmationMode.REACTION,
         discord_reaction_emoji="✅",
         discord_reply_template="Card criado no Trello: {card_url}",
@@ -43,7 +44,9 @@ def build_message(content: str) -> DiscordMessage:
         author_is_bot=False,
         message_type=0,
         webhook_id=None,
+        referenced_channel_id=None,
         referenced_message_id=None,
+        mentioned_user_ids=(),
         reactions=(),
     )
 

@@ -24,6 +24,7 @@ class DiscordApiClient(JsonApiClient):
             max_retries=settings.max_retries,
         )
         self.settings = settings
+        self._current_user_id: str | None = None
 
     def list_channel_messages(
         self,
@@ -71,6 +72,16 @@ class DiscordApiClient(JsonApiClient):
 
         collected.sort(key=lambda item: item.timestamp)
         return collected
+
+    def get_message(self, channel_id: str, message_id: str) -> DiscordMessage:
+        payload = self.request("GET", f"channels/{channel_id}/messages/{message_id}")
+        return DiscordMessage.from_api(payload)
+
+    def get_current_user_id(self) -> str:
+        if self._current_user_id is None:
+            payload = self.request("GET", "users/@me")
+            self._current_user_id = str(payload["id"])
+        return self._current_user_id
 
     def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
         encoded_emoji = quote(emoji, safe="")

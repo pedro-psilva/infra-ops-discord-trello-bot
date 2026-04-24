@@ -41,7 +41,9 @@ class DiscordMessage:
     author_is_bot: bool
     message_type: int
     webhook_id: str | None
+    referenced_channel_id: str | None
     referenced_message_id: str | None
+    mentioned_user_ids: tuple[str, ...]
     reactions: tuple[DiscordReaction, ...]
 
     @classmethod
@@ -50,6 +52,7 @@ class DiscordMessage:
         timestamp = datetime.fromisoformat(payload["timestamp"].replace("Z", "+00:00"))
         reactions = tuple(DiscordReaction.from_api(item) for item in payload.get("reactions", []))
         message_reference = payload.get("message_reference") or {}
+        mentions = tuple(str(item.get("id")) for item in payload.get("mentions", []) if item.get("id") is not None)
         return cls(
             id=str(payload["id"]),
             channel_id=str(payload["channel_id"]),
@@ -60,16 +63,25 @@ class DiscordMessage:
             author_is_bot=bool(author.get("bot")),
             message_type=int(payload.get("type", 0)),
             webhook_id=payload.get("webhook_id"),
+            referenced_channel_id=(
+                str(message_reference.get("channel_id"))
+                if message_reference.get("channel_id") is not None
+                else None
+            ),
             referenced_message_id=(
                 str(message_reference.get("message_id"))
                 if message_reference.get("message_id") is not None
                 else None
             ),
+            mentioned_user_ids=mentions,
             reactions=reactions,
         )
 
     def has_confirmation_reaction(self, emoji_name: str) -> bool:
         return any(reaction.me and reaction.emoji_name == emoji_name for reaction in self.reactions)
+
+    def mentions_user(self, user_id: str) -> bool:
+        return user_id in self.mentioned_user_ids
 
 
 @dataclass(frozen=True)
@@ -79,6 +91,15 @@ class ParsedTask:
     effective_date: date
     notes: tuple[str, ...]
     raw_excerpt: str
+
+
+@dataclass(frozen=True)
+class RequestedCard:
+    title: str
+    due_date: date | None
+    instruction: str
+    source_excerpt: str
+    context_excerpt: str
 
 
 @dataclass(frozen=True)
