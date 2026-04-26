@@ -134,12 +134,16 @@ class RequestParserTests(unittest.TestCase):
         assert requested_card is not None
         self.assertEqual(
             requested_card.title,
-            "[Discord] Precisamos revisar o contrato do fornecedor X antes da renovacao.",
+            "Revisar contrato do fornecedor X antes da renovacao",
+        )
+        self.assertEqual(
+            requested_card.summary,
+            "Precisamos revisar o contrato do fornecedor X antes da renovacao.",
         )
         self.assertEqual(requested_card.due_date.isoformat(), "2026-04-27")
         self.assertEqual([message.id for message in selected_context_messages], ["ctx-2", "ctx-3", "ctx-4"])
-        self.assertIn("Bianca Oliveira: Precisamos revisar o contrato do fornecedor X", requested_card.context_excerpt)
-        self.assertIn("Pedro Paulo: O juridico pediu os ajustes no aditivo", requested_card.context_excerpt)
+        self.assertIn("- Bianca Oliveira: Se nao fecharmos hoje, a renovacao vira automatica.", requested_card.context_excerpt)
+        self.assertIn("- Pedro Paulo: O juridico pediu os ajustes no aditivo", requested_card.context_excerpt)
         self.assertNotIn("Bom dia", requested_card.context_excerpt)
         self.assertNotIn("monitor da recepcao", requested_card.context_excerpt)
 
@@ -188,7 +192,8 @@ class RequestParserTests(unittest.TestCase):
         self.assertIsNone(reason)
         assert requested_card is not None
         self.assertEqual([message.id for message in selected_context_messages], ["ctx-11", "ctx-12"])
-        self.assertIn("VPN", requested_card.context_excerpt)
+        self.assertEqual(requested_card.summary, "O notebook da Julia esta sem acesso a VPN.")
+        self.assertIn("erro 691", requested_card.context_excerpt)
         self.assertNotIn("Bom dia", requested_card.context_excerpt)
 
     def test_parse_request_can_use_full_last_hour_when_topic_continues(self) -> None:
@@ -266,8 +271,76 @@ class RequestParserTests(unittest.TestCase):
             [message.id for message in selected_context_messages],
             ["ctx-30", "ctx-31", "ctx-32", "ctx-33", "ctx-34", "ctx-35"],
         )
-        self.assertIn("tratativa com o fornecedor", requested_card.context_excerpt)
+        self.assertEqual(
+            requested_card.summary,
+            "Se nao normalizar hoje, precisamos abrir tratativa com o fornecedor.",
+        )
+        self.assertIn("Chamado da VPN da Julia segue aberto.", requested_card.context_excerpt)
         self.assertIn("cliente da VPN", requested_card.context_excerpt)
+
+    def test_parse_request_prefers_replied_request_for_title_and_summary(self) -> None:
+        command_message = build_message(
+            message_id="cmd-5",
+            content="<@&1497315416962502680> crie um card sobre isso para segunda feira",
+            hour=19,
+            minute=49,
+            author_name="Pedro Paulo",
+            referenced_message_id="ctx-43",
+            mentioned_user_ids=(),
+            mentioned_role_ids=("1497315416962502680",),
+        )
+        recent_messages = [
+            build_message(
+                message_id="ctx-40",
+                content="Vamos fazer isso, podemos colocar no termo do notebook, nao no contrato",
+                hour=17,
+                minute=58,
+                author_id="author-2",
+                author_name="Franciele Garcia",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-41",
+                content="faz uma proposta pra mim do termo com isso que vou validar com Ricardo. Ele aprovando, a gente ajusta os outros processos (e-mail de desligamento, etc)",
+                hour=17,
+                minute=59,
+                author_id="author-2",
+                author_name="Franciele Garcia",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-42",
+                content="no contrato eu acho que faz mais sentido (PJ), por que e certeza que a pessoa vai assinar",
+                hour=18,
+                minute=0,
+                author_name="Pedro Paulo",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-43",
+                content="mas, se for pra ser nesse termo posso atualizar, dai pessoas antigas, fariamos como?",
+                hour=18,
+                minute=0,
+                author_name="Pedro Paulo",
+                mentioned_user_ids=(),
+            ),
+        ]
+
+        requested_card, _, reason = self.parser.parse(
+            command_message=command_message,
+            bot_user_id="bot-1",
+            recent_channel_messages=recent_messages,
+            reply_chain_messages=[recent_messages[1]],
+        )
+
+        self.assertIsNone(reason)
+        assert requested_card is not None
+        self.assertEqual(requested_card.title, "Proposta do termo para validar com Ricardo")
+        self.assertEqual(
+            requested_card.summary,
+            "Preparar uma proposta de termo para validar com Ricardo. Se aprovado, ajustar os outros processos (e-mail de desligamento, etc).",
+        )
+        self.assertIn("outros processos", requested_card.context_excerpt)
 
     def test_skip_when_mention_is_not_a_card_request(self) -> None:
         command_message = build_message(

@@ -140,17 +140,27 @@ class RequestParser:
             relative_base=command_message.timestamp.astimezone(self.settings.timezone),
             timezone_name=str(self.settings.timezone),
         )
+        summary = _build_request_summary(
+            reply_chain_messages=reply_chain_messages,
+            context_messages=context_messages,
+        )
         title = _build_card_title(
             instruction=instruction,
             due_fragment=due_fragment,
+            summary=summary,
+            reply_chain_messages=reply_chain_messages,
             context_messages=context_messages,
         )
-        context_excerpt = _build_context_excerpt(context_messages)
-        source_excerpt = _pick_source_summary(context_messages)
+        context_excerpt = _build_supporting_context_excerpt(
+            context_messages=context_messages,
+            summary=summary,
+        )
+        source_excerpt = summary
 
         return (
             RequestedCard(
                 title=title,
+                summary=summary,
                 due_date=due_date,
                 instruction=instruction,
                 source_excerpt=source_excerpt,
@@ -221,6 +231,8 @@ def _build_card_title(
     *,
     instruction: str,
     due_fragment: str | None,
+    summary: str,
+    reply_chain_messages: list[DiscordMessage],
     context_messages: list[DiscordMessage],
 ) -> str:
     candidate = _strip_accents(instruction)
@@ -248,32 +260,41 @@ def _build_card_title(
     if any(pattern.match(candidate) for pattern in GENERIC_TITLE_PATTERNS):
         candidate = ""
 
-    if candidate:
+    if candidate and not _is_generic_request_candidate(candidate):
         normalized = _compact_text(candidate, limit=80)
         if normalized:
-            return f"[Discord] {normalized}"
+            return _normalize_title(normalized)
 
-    source_summary = _pick_source_summary(context_messages)
-    return f"[Discord] {source_summary}"
+    summary_title = _title_from_summary(summary)
+    if summary_title:
+        return summary_title
+
+    source_summary = _pick_source_summary(
+        reply_chain_messages=reply_chain_messages,
+        context_messages=context_messages,
+    )
+    return _normalize_title(source_summary)
 
 
-def _pick_source_summary(context_messages: list[DiscordMessage]) -> str:
+def _pick_source_summary(
+    *,
+    reply_chain_messages: list[DiscordMessage],
+    context_messages: list[DiscordMessage],
+) -> str:
     best_summary = ""
     best_score = -1
-    for message in context_messages:
-        summary = _compact_text(message.content, limit=80)
-        if not summary:
-            continue
-        score = len(_topic_terms(summary))
-        if not _is_low_signal(summary):
-            score += 4
-        if 24 <= len(summary) <= 120:
-            score += 2
-        if message.referenced_message_id is None:
-            score += 1
-        if score > best_score:
-            best_score = score
-            best_summary = summary
+    for message in reply_chain_messages + context_messages:
+        for sentence in _extract_sentences(message.content):
+            summary = _compact_text(sentence, limit=100)
+            if not summary:
+                continue
+            score = _score_summary_sentence(
+                summary,
+                priority_boost=6 if message in reply_chain_messages else 0,
+            )
+            if score > best_score:
+                best_score = score
+                best_summary = summary
     if best_summary:
         return best_summary
     return "Solicitacao recebida no Discord"
@@ -291,17 +312,40 @@ def _compact_text(text: str, *, limit: int) -> str:
     return compact
 
 
-def _build_context_excerpt(context_messages: list[DiscordMessage]) -> str:
-    lines: list[str] = []
-    for message in context_messages:
-        body = _compact_multiline(message.content, limit=800)
-        if not body:
-            continue
-        lines.append(f"{message.author_name}: {body}")
+def _build_supporting_context_excerpt(
+    *,
+    context_messages: list[DiscordMessage],
+    summary: str,
+) -> str:
+    summary_terms = _topic_terms(summary)
+    scored_messages: list[tuple[int, int, str]] = []
 
-    joined = "\n".join(lines).strip()
-    if len(joined) > 1800:
-        joined = joined[:1797].rstrip() + "..."
+    for index, message in enumerate(context_messages):
+        body = _compact_multiline(message.content, limit=260)
+        if not body or body == summary:
+            continue
+        if body in summary:
+            continue
+        overlap = len(_topic_terms(body) & summary_terms)
+        score = overlap * 3
+        if _looks_actionable_sentence(body):
+            score += 3
+        if not _is_low_signal(body):
+            score += 1
+        if len(body) <= 180:
+            score += 1
+        if score <= 0:
+            continue
+        scored_messages.append((score, index, f"- {message.author_name}: {body}"))
+
+    if not scored_messages:
+        return ""
+
+    top_messages = sorted(scored_messages, key=lambda item: (-item[0], item[1]))[:3]
+    ordered_lines = [line for _, _, line in sorted(top_messages, key=lambda item: item[1])]
+    joined = "\n".join(ordered_lines)
+    if len(joined) > 900:
+        joined = joined[:897].rstrip() + "..."
     return joined
 
 
@@ -313,6 +357,252 @@ def _compact_multiline(text: str, *, limit: int) -> str:
     if len(compact) > limit:
         compact = compact[: limit - 3].rstrip() + "..."
     return compact
+
+
+def _build_request_summary(
+    *,
+    reply_chain_messages: list[DiscordMessage],
+    context_messages: list[DiscordMessage],
+) -> str:
+    primary_sentence = _pick_primary_summary_sentence(
+        reply_chain_messages=reply_chain_messages,
+        context_messages=context_messages,
+    )
+    if not primary_sentence:
+        return _pick_source_summary(
+            reply_chain_messages=reply_chain_messages,
+            context_messages=context_messages,
+        )
+
+    summary_parts = [_normalize_summary_sentence(primary_sentence)]
+    follow_up_sentence = _pick_follow_up_sentence(
+        primary_sentence=primary_sentence,
+        reply_chain_messages=reply_chain_messages,
+        context_messages=context_messages,
+    )
+    if follow_up_sentence:
+        normalized_follow_up = _normalize_summary_sentence(follow_up_sentence)
+        if normalized_follow_up and normalized_follow_up not in summary_parts:
+            summary_parts.append(normalized_follow_up)
+
+    return " ".join(part for part in summary_parts if part).strip()
+
+
+def _pick_primary_summary_sentence(
+    *,
+    reply_chain_messages: list[DiscordMessage],
+    context_messages: list[DiscordMessage],
+) -> str:
+    best_sentence = ""
+    best_score = -1
+    seen: set[str] = set()
+
+    for message in reply_chain_messages + context_messages:
+        priority_boost = 8 if message in reply_chain_messages else 0
+        for sentence_index, sentence in enumerate(_extract_sentences(message.content)):
+            normalized_key = _strip_accents(sentence.lower())
+            if normalized_key in seen:
+                continue
+            seen.add(normalized_key)
+            score = _score_summary_sentence(sentence, priority_boost=priority_boost)
+            if _looks_follow_up_sentence(sentence):
+                score -= 6
+            if message in reply_chain_messages:
+                score -= sentence_index * 2
+            if score > best_score:
+                best_score = score
+                best_sentence = sentence
+
+    return best_sentence
+
+
+def _pick_follow_up_sentence(
+    *,
+    primary_sentence: str,
+    reply_chain_messages: list[DiscordMessage],
+    context_messages: list[DiscordMessage],
+) -> str:
+    primary_terms = _topic_terms(primary_sentence)
+    best_sentence = ""
+    best_score = -1
+
+    for message in reply_chain_messages + context_messages:
+        priority_boost = 5 if message in reply_chain_messages else 0
+        for sentence in _extract_sentences(message.content):
+            if sentence == primary_sentence:
+                continue
+            overlap = len(_topic_terms(sentence) & primary_terms)
+            if not _looks_follow_up_sentence(sentence):
+                continue
+            score = _score_summary_sentence(sentence, priority_boost=priority_boost)
+            score += overlap * 2
+            score += 4
+            if score > best_score:
+                best_score = score
+                best_sentence = sentence
+
+    return best_sentence
+
+
+def _score_summary_sentence(sentence: str, *, priority_boost: int) -> int:
+    compact = _compact_text(sentence, limit=180)
+    if not compact:
+        return -100
+
+    score = priority_boost + len(_topic_terms(compact))
+    if _looks_actionable_sentence(compact):
+        score += 8
+    if _looks_follow_up_sentence(compact):
+        score += 3
+    if _is_low_signal(compact):
+        score -= 8
+    if 20 <= len(compact) <= 160:
+        score += 3
+    if compact.endswith("?"):
+        score -= 3
+    if compact.lower().startswith(("mas,", "mas ", "e ", "aí ", "ai ")):
+        score -= 1
+    return score
+
+
+def _extract_sentences(text: str) -> list[str]:
+    cleaned = re.sub(r"<@!?\d+>|<@&\d+>", "", text)
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    chunks = re.split(r"(?<=[.!?])\s+|\n+", cleaned)
+    sentences: list[str] = []
+    for chunk in chunks:
+        sentence = chunk.strip(" -*\t")
+        sentence = re.sub(r"\s{2,}", " ", sentence).strip(" ,")
+        if sentence:
+            sentences.append(sentence)
+    return sentences
+
+
+def _normalize_summary_sentence(sentence: str) -> str:
+    sentence = _compact_multiline(sentence, limit=220).strip()
+    sentence = re.sub(r"^\s*@[\w.-]+(?:\s+[\w.-]+){0,2}\s*", "", sentence)
+    sentence = re.sub(r"^\s*(?:mas,\s*)?", "", sentence, flags=re.IGNORECASE)
+
+    replacements: tuple[tuple[str, str], ...] = (
+        (
+            r"^faz\s+uma\s+proposta\s+(?:pra\s+mim\s+)?(?:do|da|de)\s+(.+?)\s+com\s+isso\s+que\s+vou\s+validar\s+com\s+(.+)$",
+            r"Preparar uma proposta de \1 para validar com \2",
+        ),
+        (
+            r"^faca\s+uma\s+proposta\s+(?:pra\s+mim\s+)?(?:do|da|de)\s+(.+?)\s+com\s+isso\s+que\s+vou\s+validar\s+com\s+(.+)$",
+            r"Preparar uma proposta de \1 para validar com \2",
+        ),
+        (
+            r"^faz\s+uma\s+proposta\s+(?:pra\s+mim\s+)?(?:do|da|de)\s+(.+)$",
+            r"Preparar uma proposta de \1",
+        ),
+        (
+            r"^faca\s+uma\s+proposta\s+(?:pra\s+mim\s+)?(?:do|da|de)\s+(.+)$",
+            r"Preparar uma proposta de \1",
+        ),
+        (
+            r"^ele\s+aprovando,\s+a\s+gente\s+ajusta\s+(.+)$",
+            r"Se aprovado, ajustar \1",
+        ),
+    )
+
+    normalized_ascii = _strip_accents(sentence.lower())
+    for pattern, replacement in replacements:
+        if re.match(pattern, normalized_ascii, flags=re.IGNORECASE):
+            sentence = re.sub(
+                pattern,
+                replacement,
+                _strip_accents(sentence),
+                flags=re.IGNORECASE,
+            )
+            break
+
+    sentence = sentence.strip(" .")
+    if not sentence:
+        return ""
+    sentence = sentence[0].upper() + sentence[1:]
+    if not sentence.endswith("."):
+        sentence += "."
+    return sentence
+
+
+def _title_from_summary(summary: str) -> str:
+    sentences = _extract_sentences(summary)
+    if not sentences:
+        return ""
+
+    title = sentences[0].strip(" .")
+    substitutions: tuple[tuple[str, str], ...] = (
+        (r"^Preparar uma proposta de termo\b", "Proposta do termo"),
+        (r"^Preparar uma proposta de\s+", "Proposta de "),
+        (r"^Preparar proposta de\s+", "Proposta de "),
+        (r"^Preparar uma proposta do\s+", "Proposta do "),
+        (r"^Preparar proposta do\s+", "Proposta do "),
+        (r"^Precisamos revisar o\s+", "Revisar "),
+        (r"^Precisamos revisar\s+", "Revisar "),
+        (r"^Revisar o\s+", "Revisar "),
+        (r"^Ajustar os\s+", "Ajustar "),
+    )
+    for pattern, replacement in substitutions:
+        title = re.sub(pattern, replacement, title, flags=re.IGNORECASE)
+
+    title = re.sub(r"\s+", " ", title).strip(" ,:-")
+    if len(title) > 90:
+        title = title[:87].rstrip() + "..."
+    return _normalize_title(title)
+
+
+def _normalize_title(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text).strip(" ,:-")
+    return normalized
+
+
+def _is_generic_request_candidate(candidate: str) -> bool:
+    normalized = _strip_accents(candidate.lower())
+    generic_fragments = (
+        "sobre isso",
+        "sobre essa mensagem",
+        "sobre esta mensagem",
+        "disso",
+        "pra ",
+        "para ",
+    )
+    return any(fragment in normalized for fragment in generic_fragments)
+
+
+def _looks_actionable_sentence(text: str) -> bool:
+    normalized = _strip_accents(text.lower())
+    actionable_patterns = (
+        r"\bprecisamos\b",
+        r"\bfaz(?:er)?\b",
+        r"\bfaca\b",
+        r"\bproposta\b",
+        r"\bajust",
+        r"\bvalid",
+        r"\brevis",
+        r"\bmigr",
+        r"\bcriar\b",
+        r"\babrir\b",
+        r"\btermo\b",
+        r"\bcontrato\b",
+        r"\bprocess",
+        r"\bdesligamento\b",
+    )
+    return any(re.search(pattern, normalized) for pattern in actionable_patterns)
+
+
+def _looks_follow_up_sentence(text: str) -> bool:
+    normalized = _strip_accents(text.lower())
+    return any(
+        fragment in normalized
+        for fragment in (
+            "se aprovado",
+            "ele aprovando",
+            "depois",
+            "ajusta os outros processos",
+            "ajustar os outros processos",
+        )
+    )
 
 
 def _select_context_messages(

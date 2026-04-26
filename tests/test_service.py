@@ -107,11 +107,12 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.discord.get_message.return_value = context_message
         service.request_parser.parse.return_value = (
             RequestedCard(
-                title="[Discord] Precisamos revisar o contrato do fornecedor X",
+                title="Revisar contrato do fornecedor X",
+                summary="Revisar o contrato do fornecedor X antes da renovacao.",
                 due_date=datetime(2026, 4, 27).date(),
                 instruction="crie um card sobre isso para segunda feira",
                 source_excerpt=context_message.content,
-                context_excerpt=f"{context_message.author_name}: {context_message.content}",
+                context_excerpt=f"- {context_message.author_name}: {context_message.content}",
             ),
             [context_message],
             None,
@@ -131,6 +132,11 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertEqual(created_count, 1)
         service.request_parser.parse.assert_called_once()
         service.trello.create_card.assert_called_once()
+        create_kwargs = service.trello.create_card.call_args.kwargs
+        self.assertEqual(create_kwargs["card_name"], "Revisar contrato do fornecedor X")
+        self.assertIn("**Resumo da solicitacao:**", create_kwargs["desc"])
+        self.assertIn("Revisar o contrato do fornecedor X antes da renovacao.", create_kwargs["desc"])
+        self.assertIn("**Solicitante:** RH", create_kwargs["desc"])
         service.trello.add_comment.assert_called_once()
         service.discord.add_reaction.assert_called_once()
         service.discord.reply_to_message.assert_called_once()
@@ -186,11 +192,12 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.discord.get_message.return_value = context_message
         service.request_parser.parse.return_value = (
             RequestedCard(
-                title="[Discord] Precisamos revisar o contrato do fornecedor X",
+                title="Revisar contrato do fornecedor X",
+                summary="Revisar o contrato do fornecedor X antes da renovacao.",
                 due_date=datetime(2026, 4, 27).date(),
                 instruction="crie um card sobre isso para segunda feira",
                 source_excerpt=context_message.content,
-                context_excerpt=f"{context_message.author_name}: {context_message.content}",
+                context_excerpt=f"- {context_message.author_name}: {context_message.content}",
             ),
             [context_message],
             None,

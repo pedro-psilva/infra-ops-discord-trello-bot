@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone as _tz
+
+UTC = _tz.utc
 
 from .config import ConfirmationMode, Settings
 from .discord_api import DiscordApiClient, build_discord_message_url
@@ -198,16 +200,18 @@ class DiscordTrelloService:
                     if requested_card.due_date is not None
                     else None
                 ),
+                desc=self._build_requested_card_desc(
+                    requested_card=requested_card,
+                    command_message=message,
+                ),
             )
             card_id = str(card["id"])
             card_url = str(card["url"])
             self.trello.add_comment(
                 card_id=card_id,
                 text=self._build_request_trello_comment(
-                    requested_card=requested_card,
                     command_message=message,
                     card_url=card_url,
-                    context_messages=selected_context_messages,
                 ),
             )
             self.discord.add_reaction(
@@ -247,10 +251,10 @@ class DiscordTrelloService:
         return f"[{task.task_type.label_pt_br}] {task.employee_name} - {date_label}"
 
     def _build_requested_card_name(self, requested_card: RequestedCard) -> str:
-        if requested_card.due_date is None:
-            return requested_card.title
-        date_label = requested_card.due_date.strftime("%d/%m/%Y")
-        return f"{requested_card.title} - {date_label}"
+        title = requested_card.title
+        if title.startswith("[Discord] "):
+            title = title[len("[Discord] "):]
+        return title
 
     def _build_due_iso(self, task_date: date) -> str:
         local_noon = datetime.combine(task_date, time(hour=12), tzinfo=self.settings.timezone)
@@ -286,13 +290,32 @@ class DiscordTrelloService:
         lines.extend(["", "Mensagem original:", task.raw_excerpt])
         return "\n".join(lines)
 
-    def _build_request_trello_comment(
+    def _build_requested_card_desc(
         self,
         *,
         requested_card: RequestedCard,
         command_message: DiscordMessage,
+    ) -> str:
+        local_timestamp = command_message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
+        prazo = requested_card.due_date.strftime("%d/%m/%Y") if requested_card.due_date else "Sem prazo definido"
+        lines = [
+            "**Resumo da solicitacao:**",
+            requested_card.summary,
+            "",
+            f"**Solicitante:** {command_message.author_name}",
+            f"**Prazo:** {prazo}",
+            f"**Enviado em:** {local_timestamp}",
+        ]
+        context = requested_card.context_excerpt
+        if context:
+            lines.extend(["", "**Contexto de apoio:**", context])
+        return "\n".join(lines)
+
+    def _build_request_trello_comment(
+        self,
+        *,
+        command_message: DiscordMessage,
         card_url: str,
-        context_messages: list[DiscordMessage],
     ) -> str:
         local_timestamp = command_message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
         command_url = build_discord_message_url(
@@ -300,43 +323,7 @@ class DiscordTrelloService:
             channel_id=command_message.channel_id,
             message_id=command_message.id,
         )
-        lines = [
-            "Origem no Discord:",
-            f"- Pedido: {command_url}",
-            "- Janela avaliada: ultimos 60 minutos antes do pedido",
-            "",
-            "Resumo interpretado:",
-            f"- Titulo: {requested_card.title}",
-            f"- Prazo: {requested_card.due_date.strftime('%d/%m/%Y') if requested_card.due_date else 'sem prazo'}",
-            f"- Solicitante: {command_message.author_name}",
-            f"- Pedido enviado em: {local_timestamp}",
-            "",
-            "Pedido do usuario:",
-            requested_card.instruction,
-            "",
-            "Contexto lido:",
-            requested_card.context_excerpt or requested_card.source_excerpt,
-            "",
-            f"Card criado: {card_url}",
-        ]
-        if context_messages:
-            first_message = context_messages[0]
-            last_message = context_messages[-1]
-            first_url = build_discord_message_url(
-                guild_id=self.settings.discord_guild_id,
-                channel_id=first_message.channel_id,
-                message_id=first_message.id,
-            )
-            last_url = build_discord_message_url(
-                guild_id=self.settings.discord_guild_id,
-                channel_id=last_message.channel_id,
-                message_id=last_message.id,
-            )
-            lines[2:2] = [
-                f"- Inicio do assunto: {first_url}",
-                f"- Fim do assunto: {last_url}",
-            ]
-        return "\n".join(lines)
+        return f"Origem: {command_url}\nSolicitado por {command_message.author_name} em {local_timestamp}"
 
     def _build_discord_reply(self, card_urls: list[str]) -> str:
         if len(card_urls) == 1:

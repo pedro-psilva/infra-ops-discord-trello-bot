@@ -102,6 +102,7 @@ class ParsedTask:
 @dataclass(frozen=True)
 class RequestedCard:
     title: str
+    summary: str
     due_date: date | None
     instruction: str
     source_excerpt: str
