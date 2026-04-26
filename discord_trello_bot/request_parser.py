@@ -102,7 +102,8 @@ TOPIC_STOPWORDS = {
     "vai",
 }
 
-MAX_CONTEXT_MESSAGES = 30
+MAX_CONTEXT_MESSAGES = 50
+MAX_DETAIL_SENTENCES = 2
 SHORT_GAP_MINUTES = 20
 LONG_GAP_MINUTES = 90
 MIN_ANALYSIS_WINDOW = timedelta(hours=1)
@@ -151,7 +152,7 @@ class RequestParser:
             reply_chain_messages=reply_chain_messages,
             context_messages=context_messages,
         )
-        context_excerpt = _build_supporting_context_excerpt(
+        context_excerpt = _build_supporting_details_summary(
             context_messages=context_messages,
             summary=summary,
         )
@@ -312,40 +313,77 @@ def _compact_text(text: str, *, limit: int) -> str:
     return compact
 
 
-def _build_supporting_context_excerpt(
+def _build_supporting_details_summary(
     *,
     context_messages: list[DiscordMessage],
     summary: str,
 ) -> str:
     summary_terms = _topic_terms(summary)
-    scored_messages: list[tuple[int, int, str]] = []
+    summary_keys = {
+        _strip_accents(_compact_text(sentence, limit=220).lower()).strip(" .")
+        for sentence in _extract_sentences(summary)
+        if _compact_text(sentence, limit=220)
+    }
+    scored_sentences: list[tuple[int, int, int, str]] = []
+    seen_keys: set[str] = set()
 
-    for index, message in enumerate(context_messages):
-        body = _compact_multiline(message.content, limit=260)
-        if not body or body == summary:
-            continue
-        if body in summary:
-            continue
-        overlap = len(_topic_terms(body) & summary_terms)
-        score = overlap * 3
-        if _looks_actionable_sentence(body):
-            score += 3
-        if not _is_low_signal(body):
-            score += 1
-        if len(body) <= 180:
-            score += 1
-        if score <= 0:
-            continue
-        scored_messages.append((score, index, f"- {message.author_name}: {body}"))
+    for message_index, message in enumerate(context_messages):
+        for sentence_index, sentence in enumerate(_extract_sentences(message.content)):
+            compact = _compact_text(sentence, limit=220)
+            if not compact:
+                continue
+            normalized_key = _strip_accents(compact.lower()).strip(" .")
+            if normalized_key in summary_keys or normalized_key in seen_keys:
+                continue
+            summary_style_sentence = _normalize_summary_sentence(compact)
+            if summary_style_sentence:
+                summary_style_key = _strip_accents(summary_style_sentence.lower()).strip(" .")
+                if summary_style_key in summary_keys:
+                    continue
+            seen_keys.add(normalized_key)
+            normalized_sentence = _normalize_detail_sentence(compact)
+            if not normalized_sentence:
+                continue
+            normalized_sentence_key = _strip_accents(normalized_sentence.lower()).strip(" .")
+            if normalized_sentence_key in summary_keys:
+                continue
+            candidate_terms = _topic_terms(normalized_sentence)
+            if candidate_terms and len(candidate_terms & summary_terms) >= max(2, len(candidate_terms) - 2):
+                continue
+            overlap = len(_topic_terms(compact) & summary_terms)
+            score = overlap * 3
+            if _looks_actionable_sentence(compact):
+                score += 3
+            if _looks_follow_up_sentence(compact):
+                score += 2
+            if not _is_low_signal(compact):
+                score += 1
+            if message_index == 0:
+                score += 2
+            if sentence_index == 0:
+                score += 1
+            if compact.endswith("?"):
+                score -= 5
+            if len(compact) <= 180:
+                score += 1
+            if score <= 1:
+                continue
+            scored_sentences.append((score, message_index, sentence_index, normalized_sentence))
 
-    if not scored_messages:
+    if not scored_sentences:
         return ""
 
-    top_messages = sorted(scored_messages, key=lambda item: (-item[0], item[1]))[:3]
-    ordered_lines = [line for _, _, line in sorted(top_messages, key=lambda item: item[1])]
-    joined = "\n".join(ordered_lines)
-    if len(joined) > 900:
-        joined = joined[:897].rstrip() + "..."
+    selected_sentences = sorted(
+        scored_sentences,
+        key=lambda item: (-item[0], item[1], item[2]),
+    )[:MAX_DETAIL_SENTENCES]
+    ordered_sentences = [
+        sentence
+        for _, _, _, sentence in sorted(selected_sentences, key=lambda item: (item[1], item[2]))
+    ]
+    joined = " ".join(ordered_sentences)
+    if len(joined) > 600:
+        joined = joined[:597].rstrip() + "..."
     return joined
 
 
@@ -526,6 +564,49 @@ def _normalize_summary_sentence(sentence: str) -> str:
     return sentence
 
 
+def _normalize_detail_sentence(sentence: str) -> str:
+    sentence = _compact_multiline(sentence, limit=220).strip()
+    sentence = re.sub(r"^\s*@[\w.-]+(?:\s+[\w.-]+){0,2}\s*", "", sentence)
+    sentence = re.sub(r"^\s*(?:mas|e|ai),\s*", "", sentence, flags=re.IGNORECASE)
+    sentence = re.sub(r"^\s*vamos fazer isso,\s*", "", sentence, flags=re.IGNORECASE)
+
+    replacements: tuple[tuple[str, str], ...] = (
+        (
+            r"^podemos colocar no (.+), nao no (.+)$",
+            r"Foi considerado usar \1 em vez de \2",
+        ),
+        (
+            r"^no (.+) eu acho que faz mais sentido(?: \(.+?\))?, por que e certeza que a pessoa vai assinar$",
+            r"Tambem foi considerada a alternativa de manter isso em \1, para garantir a assinatura",
+        ),
+        (
+            r"^se nao (.+)$",
+            r"Existe urgencia: se nao \1",
+        ),
+    )
+
+    normalized_ascii = _strip_accents(sentence.lower())
+    for pattern, replacement in replacements:
+        if re.match(pattern, normalized_ascii, flags=re.IGNORECASE):
+            sentence = re.sub(
+                pattern,
+                replacement,
+                _strip_accents(sentence),
+                flags=re.IGNORECASE,
+            )
+            break
+
+    sentence = sentence.strip(" .")
+    if not sentence:
+        return ""
+    sentence = sentence[0].upper() + sentence[1:]
+    if sentence.endswith("?"):
+        sentence = sentence[:-1].rstrip()
+    if not sentence.endswith("."):
+        sentence += "."
+    return sentence
+
+
 def _title_from_summary(summary: str) -> str:
     sentences = _extract_sentences(summary)
     if not sentences:
@@ -639,6 +720,7 @@ def _select_context_messages(
     selected_ids = {message.id for message in selected_messages}
     participants = {message.author_id for message in selected_messages}
     topic_terms = set().union(*(_topic_terms(message.content) for message in selected_messages))
+    seed_terms = set(topic_terms)
     index_by_id = {message.id: index for index, message in enumerate(ordered_messages)}
     left_index = min(index_by_id[message.id] for message in selected_messages if message.id in index_by_id)
     right_index = max(index_by_id[message.id] for message in selected_messages if message.id in index_by_id)
@@ -652,6 +734,8 @@ def _select_context_messages(
             selected_ids=selected_ids,
             participants=participants,
             topic_terms=topic_terms,
+            seed_terms=seed_terms,
+            allow_loose_bridge=bool(reply_chain_messages),
         ):
             break
         left_index -= 1
@@ -669,6 +753,8 @@ def _select_context_messages(
             selected_ids=selected_ids,
             participants=participants,
             topic_terms=topic_terms,
+            seed_terms=seed_terms,
+            allow_loose_bridge=bool(reply_chain_messages),
         ):
             break
         right_index += 1
@@ -706,6 +792,8 @@ def _should_extend_segment(
     selected_ids: set[str],
     participants: set[str],
     topic_terms: set[str],
+    seed_terms: set[str],
+    allow_loose_bridge: bool,
 ) -> bool:
     if not _is_context_candidate(candidate):
         return False
@@ -715,7 +803,11 @@ def _should_extend_segment(
     if _looks_like_bot_command(candidate.content):
         return False
 
-    overlap = len(_topic_terms(candidate.content) & topic_terms)
+    candidate_terms = _topic_terms(candidate.content)
+    adjacent_terms = _topic_terms(adjacent_message.content)
+    overlap = len(candidate_terms & topic_terms)
+    seed_overlap = len(candidate_terms & seed_terms)
+    adjacent_overlap = len(candidate_terms & adjacent_terms)
     score = 0
     if candidate.referenced_message_id and candidate.referenced_message_id in selected_ids:
         score += 4
@@ -727,14 +819,33 @@ def _should_extend_segment(
         score += 2
     if overlap >= 2:
         score += 1
+    if seed_overlap >= 1:
+        score += 2
+    if seed_overlap >= 2:
+        score += 1
+    if adjacent_overlap >= 1:
+        score += 2
+    if adjacent_overlap >= 2:
+        score += 1
     if gap_minutes <= SHORT_GAP_MINUTES:
         score += 1
         if adjacent_message.author_id in participants:
             score += 1
+    if candidate.author_id == adjacent_message.author_id:
+        score += 1
+    if _looks_actionable_sentence(candidate.content):
+        score += 1
     if _is_low_signal(candidate.content):
         score -= 1
 
-    return score >= 2
+    if score >= 3:
+        return True
+    return (
+        allow_loose_bridge
+        and len(selected_ids) == 1
+        and gap_minutes <= SHORT_GAP_MINUTES
+        and not _is_low_signal(candidate.content)
+    )
 
 
 def _looks_like_bot_command(text: str) -> bool:

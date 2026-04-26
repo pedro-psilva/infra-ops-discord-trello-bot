@@ -112,7 +112,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
                 due_date=datetime(2026, 4, 27).date(),
                 instruction="crie um card sobre isso para segunda feira",
                 source_excerpt=context_message.content,
-                context_excerpt=f"- {context_message.author_name}: {context_message.content}",
+                context_excerpt="O juridico pediu os ajustes no aditivo antes da renovacao.",
             ),
             [context_message],
             None,
@@ -137,6 +137,8 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertIn("**Resumo da solicitacao:**", create_kwargs["desc"])
         self.assertIn("Revisar o contrato do fornecedor X antes da renovacao.", create_kwargs["desc"])
         self.assertIn("**Solicitante:** RH", create_kwargs["desc"])
+        self.assertIn("**Detalhes importantes:**", create_kwargs["desc"])
+        self.assertNotIn("Contexto de apoio", create_kwargs["desc"])
         service.trello.add_comment.assert_called_once()
         service.discord.add_reaction.assert_called_once()
         service.discord.reply_to_message.assert_called_once()
@@ -197,7 +199,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
                 due_date=datetime(2026, 4, 27).date(),
                 instruction="crie um card sobre isso para segunda feira",
                 source_excerpt=context_message.content,
-                context_excerpt=f"- {context_message.author_name}: {context_message.content}",
+                context_excerpt="O juridico pediu os ajustes no aditivo antes da renovacao.",
             ),
             [context_message],
             None,

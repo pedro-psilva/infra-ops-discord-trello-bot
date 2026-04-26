@@ -308,7 +308,7 @@ class DiscordTrelloService:
         ]
         context = requested_card.context_excerpt
         if context:
-            lines.extend(["", "**Contexto de apoio:**", context])
+            lines.extend(["", "**Detalhes importantes:**", context])
         return "\n".join(lines)
 
     def _build_request_trello_comment(
@@ -367,7 +367,7 @@ class DiscordTrelloService:
         current_message_id = message.referenced_message_id
         visited: set[tuple[str, str]] = set()
 
-        while current_message_id and len(context_messages) < 5:
+        while current_message_id and len(context_messages) < 20:
             key = (current_channel_id, current_message_id)
             if key in visited:
                 break

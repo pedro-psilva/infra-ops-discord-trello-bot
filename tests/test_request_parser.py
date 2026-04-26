@@ -142,8 +142,10 @@ class RequestParserTests(unittest.TestCase):
         )
         self.assertEqual(requested_card.due_date.isoformat(), "2026-04-27")
         self.assertEqual([message.id for message in selected_context_messages], ["ctx-2", "ctx-3", "ctx-4"])
-        self.assertIn("- Bianca Oliveira: Se nao fecharmos hoje, a renovacao vira automatica.", requested_card.context_excerpt)
-        self.assertIn("- Pedro Paulo: O juridico pediu os ajustes no aditivo", requested_card.context_excerpt)
+        self.assertIn("O juridico pediu os ajustes no aditivo e a planilha de custos.", requested_card.context_excerpt)
+        self.assertIn("Existe urgencia: se nao fecharmos hoje, a renovacao vira automatica.", requested_card.context_excerpt)
+        self.assertNotIn("Bianca Oliveira", requested_card.context_excerpt)
+        self.assertNotIn("Pedro Paulo", requested_card.context_excerpt)
         self.assertNotIn("Bom dia", requested_card.context_excerpt)
         self.assertNotIn("monitor da recepcao", requested_card.context_excerpt)
 
@@ -194,6 +196,7 @@ class RequestParserTests(unittest.TestCase):
         self.assertEqual([message.id for message in selected_context_messages], ["ctx-11", "ctx-12"])
         self.assertEqual(requested_card.summary, "O notebook da Julia esta sem acesso a VPN.")
         self.assertIn("erro 691", requested_card.context_excerpt)
+        self.assertNotIn("Pedro Paulo", requested_card.context_excerpt)
         self.assertNotIn("Bom dia", requested_card.context_excerpt)
 
     def test_parse_request_can_use_full_last_hour_when_topic_continues(self) -> None:
@@ -275,8 +278,9 @@ class RequestParserTests(unittest.TestCase):
             requested_card.summary,
             "Se nao normalizar hoje, precisamos abrir tratativa com o fornecedor.",
         )
-        self.assertIn("Chamado da VPN da Julia segue aberto.", requested_card.context_excerpt)
+        self.assertIn("Ela ainda nao consegue autenticar no notebook novo.", requested_card.context_excerpt)
         self.assertIn("cliente da VPN", requested_card.context_excerpt)
+        self.assertNotIn("Bianca Oliveira", requested_card.context_excerpt)
 
     def test_parse_request_prefers_replied_request_for_title_and_summary(self) -> None:
         command_message = build_message(
@@ -326,7 +330,7 @@ class RequestParserTests(unittest.TestCase):
             ),
         ]
 
-        requested_card, _, reason = self.parser.parse(
+        requested_card, selected_context_messages, reason = self.parser.parse(
             command_message=command_message,
             bot_user_id="bot-1",
             recent_channel_messages=recent_messages,
@@ -335,12 +339,17 @@ class RequestParserTests(unittest.TestCase):
 
         self.assertIsNone(reason)
         assert requested_card is not None
+        self.assertEqual(
+            [message.id for message in selected_context_messages],
+            ["ctx-40", "ctx-41", "ctx-42", "ctx-43"],
+        )
         self.assertEqual(requested_card.title, "Proposta do termo para validar com Ricardo")
         self.assertEqual(
             requested_card.summary,
             "Preparar uma proposta de termo para validar com Ricardo. Se aprovado, ajustar os outros processos (e-mail de desligamento, etc).",
         )
-        self.assertIn("outros processos", requested_card.context_excerpt)
+        self.assertIn("Foi considerado usar termo do notebook em vez de contrato.", requested_card.context_excerpt)
+        self.assertNotIn("Franciele Garcia", requested_card.context_excerpt)
 
     def test_skip_when_mention_is_not_a_card_request(self) -> None:
         command_message = build_message(
