@@ -198,6 +198,8 @@ Quando `GMAIL_USER_EMAIL`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` e `GMAIL_REF
 
 O e-mail e o Discord usam a mesma chave de deduplicacao: tipo da tarefa, nome do colaborador e data. Quem chegar primeiro cria o card; quem chegar depois comenta no card existente.
 
+Enquanto o onboarding estiver futuro, o bot tambem monitora mensagens complementares no Discord. Se uma mensagem mencionar o colaborador e/ou a data de entrada e trouxer informacoes como notebook, perifericos, endereco, cargo, gestor ou modalidade, o bot adiciona comentario no card aberto correspondente em vez de criar outro card.
+
 Depois do processamento, o bot cria ou reutiliza a label definida em `GMAIL_PROCESSED_LABEL_NAME` e aplica no e-mail para evitar duplicidade.
 
 ## Como pegar IDs rapidamente

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from datetime import date, datetime, time, timedelta, timezone as _tz
 
 UTC = _tz.utc
@@ -9,9 +11,9 @@ from .config import ConfirmationMode, Settings
 from .discord_api import DiscordApiClient, build_discord_message_url
 from .gmail_api import GmailApiClient
 from .http import ApiError
-from .models import DiscordMessage, EmailMessage, ParsedTask, RequestedCard, RunSummary
+from .models import DiscordMessage, EmailMessage, ParsedTask, RequestedCard, RunSummary, TaskCard, TaskType
 from .openai_request_refiner import OpenAIRequestRefiner
-from .parser import TaskParser
+from .parser import NOTE_KEYWORDS, TaskParser
 from .request_parser import RequestParser
 from .trello_api import TrelloApiClient
 
@@ -126,6 +128,9 @@ class DiscordTrelloService:
 
         parse_result = self.parser.parse_message(message)
         if not parse_result.tasks:
+            complement_outcome = self._process_task_complement_message(message)
+            if complement_outcome is not None:
+                return complement_outcome
             LOGGER.info("Mensagem %s ignorada: %s.", message.id, parse_result.reason)
             return "skipped", 0
 
@@ -301,6 +306,48 @@ class DiscordTrelloService:
         if not message.content:
             return False
         return True
+
+    def _process_task_complement_message(self, message: DiscordMessage) -> tuple[str, int] | None:
+        if not _has_complement_signal(message.content):
+            return None
+
+        today = datetime.now(tz=self.settings.timezone).date()
+        future_onboarding_cards = [
+            card
+            for card in self.trello.list_open_task_cards(TaskType.ONBOARDING)
+            if card.effective_date >= today
+        ]
+        matched_cards = _match_complement_cards(
+            text=message.content,
+            cards=future_onboarding_cards,
+        )
+        if not matched_cards:
+            return None
+
+        try:
+            for card in matched_cards:
+                self.trello.add_comment(
+                    card_id=card.id,
+                    text=self._build_complement_trello_comment(
+                        card=card,
+                        message=message,
+                    ),
+                )
+
+            self.discord.add_reaction(
+                channel_id=message.channel_id,
+                message_id=message.id,
+                emoji=self.settings.discord_reaction_emoji,
+            )
+            LOGGER.info(
+                "Mensagem %s comentada em %s card(s) futuro(s) de onboarding.",
+                message.id,
+                len(matched_cards),
+            )
+            return "created", 0
+        except (ApiError, ValueError):
+            LOGGER.exception("Falha ao comentar complemento da mensagem %s.", message.id)
+            return "error", 0
 
     def _process_gmail_messages(self, summary: RunSummary) -> None:
         if self.gmail is None:
@@ -495,6 +542,34 @@ class DiscordTrelloService:
         lines.extend(["", "Conteudo original:", task.raw_excerpt])
         return "\n".join(lines)
 
+    def _build_complement_trello_comment(
+        self,
+        *,
+        card: TaskCard,
+        message: DiscordMessage,
+    ) -> str:
+        local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
+        message_url = build_discord_message_url(
+            guild_id=self.settings.discord_guild_id,
+            channel_id=message.channel_id,
+            message_id=message.id,
+        )
+        lines = [
+            "Complemento detectado no Discord:",
+            message_url,
+            "",
+            "Card relacionado:",
+            f"- Tipo: {card.task_type.label_pt_br}",
+            f"- Colaborador: {card.employee_name}",
+            f"- Data: {card.effective_date.strftime('%d/%m/%Y')}",
+            f"- Autor da mensagem: {message.author_name}",
+            f"- Enviado em: {local_timestamp}",
+            "",
+            "Informacao complementar:",
+        ]
+        lines.extend(f"- {note}" for note in _extract_complement_notes(message.content))
+        return "\n".join(lines)
+
     def _build_requested_card_desc(
         self,
         *,
@@ -584,3 +659,98 @@ class DiscordTrelloService:
 
         context_messages.reverse()
         return context_messages
+
+
+COMPLEMENT_PHRASES = (
+    "nao precisa",
+    "nao vai precisar",
+    "sem notebook",
+    "sem periferico",
+    "sem perifericos",
+    "precisa de",
+    "vai precisar",
+    "complemento",
+    "alteracao",
+    "alterar",
+    "atualizar",
+)
+
+
+def _has_complement_signal(text: str) -> bool:
+    normalized = _normalize_lookup(text)
+    normalized_keywords = {_normalize_lookup(keyword) for keyword in NOTE_KEYWORDS}
+    return any(keyword in normalized for keyword in normalized_keywords) or any(
+        phrase in normalized for phrase in COMPLEMENT_PHRASES
+    )
+
+
+def _match_complement_cards(*, text: str, cards: list[TaskCard]) -> list[TaskCard]:
+    normalized_text = _normalize_lookup(text)
+    matched_cards: list[TaskCard] = []
+    for card in cards:
+        name_parts = _normalize_lookup(card.employee_name).split()
+        if not name_parts:
+            continue
+        full_name = " ".join(name_parts)
+        first_name = name_parts[0]
+        last_name = name_parts[-1]
+        date_matches = _text_mentions_date(normalized_text, card.effective_date)
+
+        if full_name in normalized_text:
+            matched_cards.append(card)
+            continue
+        if _contains_word(normalized_text, first_name) and (
+            _contains_word(normalized_text, last_name) or date_matches
+        ):
+            matched_cards.append(card)
+
+    return matched_cards
+
+
+def _text_mentions_date(normalized_text: str, target_date: date) -> bool:
+    day = target_date.day
+    month = target_date.month
+    year = target_date.year
+    labels = {
+        f"{day:02d}/{month:02d}/{year}",
+        f"{day}/{month}/{year}",
+        f"{day:02d}/{month:02d}",
+        f"{day}/{month}",
+        f"dia {day}",
+        f"dia {day:02d}",
+    }
+    return any(label in normalized_text for label in labels)
+
+
+def _contains_word(text: str, word: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text) is not None
+
+
+def _extract_complement_notes(text: str) -> list[str]:
+    notes: list[str] = []
+    for line in re.split(r"\n+", text):
+        cleaned = line.strip(" -*\t")
+        if not cleaned:
+            continue
+        if _has_complement_signal(cleaned):
+            notes.append(_compact_comment_text(cleaned))
+    if notes:
+        return notes
+    return [_compact_comment_text(text)]
+
+
+def _compact_comment_text(text: str) -> str:
+    compact = re.sub(r"\s+", " ", text).strip(" ,")
+    if len(compact) > 500:
+        compact = compact[:497].rstrip() + "..."
+    return compact
+
+
+def _normalize_lookup(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", text.casefold())
+    without_accents = "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Mn"
+    )
+    return re.sub(r"\s+", " ", without_accents).strip()

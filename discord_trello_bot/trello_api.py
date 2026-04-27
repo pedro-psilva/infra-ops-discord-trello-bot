@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from .config import Settings
 from .http import JsonApiClient
-from .models import TaskType
+from .models import TaskCard, TaskType
 
 
 class TrelloApiClient(JsonApiClient):
@@ -42,19 +43,25 @@ class TrelloApiClient(JsonApiClient):
         return card
 
     def find_open_card_by_name(self, card_name: str) -> dict | None:
-        target_list_id = self.resolve_target_list_id()
-        if self._target_list_cards_cache is None:
-            self._target_list_cards_cache = self.request(
-                "GET",
-                f"lists/{target_list_id}/cards",
-                params=self._with_auth({"fields": "id,name,url", "filter": "open"}),
-            )
+        self._load_target_list_cards()
 
         target_name = card_name.casefold()
-        for card in self._target_list_cards_cache:
+        for card in self._target_list_cards_cache or []:
             if str(card.get("name", "")).casefold() == target_name:
                 return card
         return None
+
+    def list_open_task_cards(self, task_type: TaskType | None = None) -> list[TaskCard]:
+        self._load_target_list_cards()
+        cards: list[TaskCard] = []
+        for card in self._target_list_cards_cache or []:
+            task_card = _parse_task_card(card)
+            if task_card is None:
+                continue
+            if task_type is not None and task_card.task_type is not task_type:
+                continue
+            cards.append(task_card)
+        return cards
 
     def add_comment(self, *, card_id: str, text: str) -> dict:
         params = self._with_auth({"text": text})
@@ -89,6 +96,16 @@ class TrelloApiClient(JsonApiClient):
     def _remember_target_list_card(self, card: dict) -> None:
         if self._target_list_cards_cache is not None:
             self._target_list_cards_cache.append(card)
+
+    def _load_target_list_cards(self) -> None:
+        if self._target_list_cards_cache is not None:
+            return
+        target_list_id = self.resolve_target_list_id()
+        self._target_list_cards_cache = self.request(
+            "GET",
+            f"lists/{target_list_id}/cards",
+            params=self._with_auth({"fields": "id,name,url", "filter": "open"}),
+        )
 
     def resolve_target_list_id(self) -> str:
         if self._resolved_target_list_id:
@@ -163,3 +180,31 @@ def _extract_card_ref(value: str) -> str:
     if match:
         return match.group(1)
     return value
+
+
+def _parse_task_card(card: dict) -> TaskCard | None:
+    name = str(card.get("name", ""))
+    match = re.match(
+        r"^\[(?P<type>Onboarding|Offboarding)\]\s+(?P<employee>.+?)\s+-\s+(?P<day>\d{2})/(?P<month>\d{2})/(?P<year>\d{4})$",
+        name,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    day = int(match.group("day"))
+    month = int(match.group("month"))
+    year = int(match.group("year"))
+    task_type = (
+        TaskType.ONBOARDING
+        if match.group("type").casefold() == "onboarding"
+        else TaskType.OFFBOARDING
+    )
+    return TaskCard(
+        id=str(card["id"]),
+        url=str(card["url"]),
+        name=name,
+        task_type=task_type,
+        employee_name=match.group("employee").strip(),
+        effective_date=date(year, month, day),
+    )

@@ -100,6 +100,16 @@ class ParsedTask:
 
 
 @dataclass(frozen=True)
+class TaskCard:
+    id: str
+    url: str
+    name: str
+    task_type: TaskType
+    employee_name: str
+    effective_date: date
+
+
+@dataclass(frozen=True)
 class EmailMessage:
     id: str
     thread_id: str

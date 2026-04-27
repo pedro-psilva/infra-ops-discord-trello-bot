@@ -137,6 +137,14 @@ class TaskParserTests(unittest.TestCase):
         self.assertIsNone(result.task)
         self.assertEqual(result.reason, "data nao identificada")
 
+    def test_explicit_day_month_uses_message_year(self) -> None:
+        message = build_message("Offboarding Joao Souza dia 14/04. Vai devolver por Uber.")
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.effective_date.isoformat(), "2026-04-14")
+
 
 if __name__ == "__main__":
     unittest.main()

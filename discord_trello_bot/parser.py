@@ -216,10 +216,13 @@ def _extract_date(text: str, relative_base: datetime, timezone_name: str) -> dat
 
     for pattern in DATE_TOKEN_PATTERNS:
         for match in pattern.finditer(text):
-            parsed = dateparser.parse(match.group(0), languages=["pt", "en"], settings=settings)
-            if parsed is None:
-                continue
-            candidates.append((match.start(), parsed.date()))
+            parsed_date = _parse_explicit_date_token(match.group(0), default_year=relative_base.year)
+            if parsed_date is None:
+                parsed = dateparser.parse(match.group(0), languages=["pt", "en"], settings=settings)
+                if parsed is None:
+                    continue
+                parsed_date = parsed.date()
+            candidates.append((match.start(), parsed_date))
 
     if not candidates:
         searched = search_dates(text, languages=["pt", "en"], settings=settings) or []
@@ -236,6 +239,24 @@ def _extract_date(text: str, relative_base: datetime, timezone_name: str) -> dat
 
     candidates.sort(key=lambda item: item[0])
     return candidates[0][1]
+
+
+def _parse_explicit_date_token(token: str, *, default_year: int) -> date | None:
+    compact = token.strip()
+    match = re.fullmatch(r"(?P<day>\d{1,2})[/-](?P<month>\d{1,2})(?:[/-](?P<year>\d{2,4}))?", compact)
+    if not match:
+        return None
+    year = match.group("year")
+    if year is None:
+        parsed_year = default_year
+    elif len(year) == 2:
+        parsed_year = 2000 + int(year)
+    else:
+        parsed_year = int(year)
+    try:
+        return date(parsed_year, int(match.group("month")), int(match.group("day")))
+    except ValueError:
+        return None
 
 
 def _looks_like_date_fragment(fragment: str) -> bool:

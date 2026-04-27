@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 from discord_trello_bot.config import ConfirmationMode, Settings
-from discord_trello_bot.models import DiscordMessage, EmailMessage, RequestedCard
+from discord_trello_bot.models import DiscordMessage, EmailMessage, RequestedCard, TaskCard, TaskType
 from discord_trello_bot.service import DiscordTrelloService
 
 
@@ -358,6 +358,78 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         comment = service.trello.add_comment.call_args.kwargs["text"]
         self.assertIn("Endereco: Rua das Flores", comment)
         self.assertIn("Cargo: Analista de Operacoes", comment)
+
+    def test_discord_complement_comments_future_onboarding_card(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.discord = Mock()
+        service.trello.list_open_task_cards.return_value = [
+            TaskCard(
+                id="card-ana",
+                url="https://trello/card-ana",
+                name="[Onboarding] Ana Paula Souza - 04/05/2026",
+                task_type=TaskType.ONBOARDING,
+                employee_name="Ana Paula Souza",
+                effective_date=datetime(2026, 5, 4).date(),
+            )
+        ]
+        message = build_message(
+            content="Ana do dia 04/05 nao vai precisar de notebook.",
+            hour=11,
+            minute=30,
+        )
+
+        outcome, created_count = service._process_message(
+            message,
+            channel_messages=[message],
+            bot_reply_reference_ids=set(),
+            modes={"structured"},
+            bot_user_id=None,
+            bot_role_ids=set(),
+        )
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 0)
+        service.trello.create_card_from_template.assert_not_called()
+        service.trello.add_comment.assert_called_once()
+        self.assertEqual(service.trello.add_comment.call_args.kwargs["card_id"], "card-ana")
+        comment = service.trello.add_comment.call_args.kwargs["text"]
+        self.assertIn("Complemento detectado no Discord:", comment)
+        self.assertIn("Ana do dia 04/05 nao vai precisar de notebook.", comment)
+        service.discord.add_reaction.assert_called_once()
+
+    def test_discord_complement_ignores_past_onboarding_card(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.discord = Mock()
+        service.trello.list_open_task_cards.return_value = [
+            TaskCard(
+                id="card-old",
+                url="https://trello/card-old",
+                name="[Onboarding] Ana Paula Souza - 20/04/2026",
+                task_type=TaskType.ONBOARDING,
+                employee_name="Ana Paula Souza",
+                effective_date=datetime(2026, 4, 20).date(),
+            )
+        ]
+        message = build_message(
+            content="Ana Paula Souza nao vai precisar de notebook.",
+            hour=11,
+            minute=30,
+        )
+
+        outcome, created_count = service._process_message(
+            message,
+            channel_messages=[message],
+            bot_reply_reference_ids=set(),
+            modes={"structured"},
+            bot_user_id=None,
+            bot_role_ids=set(),
+        )
+
+        self.assertEqual(outcome, "skipped")
+        self.assertEqual(created_count, 0)
+        service.trello.add_comment.assert_not_called()
 
 
 if __name__ == "__main__":
