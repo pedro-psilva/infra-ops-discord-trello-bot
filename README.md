@@ -12,9 +12,11 @@ Para ficar o mais perto possivel de custo zero, o projeto foi estruturado para r
 2. O script lista as mensagens recentes dos canais configurados.
 3. O parser procura tipo da tarefa, nome do colaborador e data.
 4. Quando os tres campos sao encontrados com seguranca, o bot:
+   - procura um card aberto com o mesmo tipo, nome do colaborador e data
    - copia o template correto do Trello com `idCardSource`
    - define o nome do card
    - define a data no card
+   - se o card ja existir, apenas comenta a nova origem/informacoes sem duplicar
    - adiciona um comentario com resumo, observacoes detectadas, informacoes adicionais e link da mensagem no Discord
    - reage com `✅` na mensagem
 5. Nos canais de pedido por mencao, quando alguem responde uma mensagem com algo como `@Bot, crie um card sobre isso para segunda feira`, o bot:
@@ -192,7 +194,9 @@ O fluxo estruturado diario de onboarding/offboarding continua sem OpenAI.
 
 ## Gmail no fluxo diario
 
-Quando `GMAIL_USER_EMAIL`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` e `GMAIL_REFRESH_TOKEN` estiverem configurados, o workflow diario tambem busca e-mails pelo `GMAIL_QUERY`. Ao criar os cards, o bot adiciona no comentario informacoes adicionais encontradas no e-mail, como endereco, CEP, telefone, cargo, area, gestor, modalidade, notebook e perifericos.
+Quando `GMAIL_USER_EMAIL`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` e `GMAIL_REFRESH_TOKEN` estiverem configurados, o workflow diario tambem busca e-mails pelo `GMAIL_QUERY`. Ao criar ou encontrar os cards, o bot adiciona no comentario informacoes adicionais encontradas no e-mail, como endereco, CEP, telefone, cargo, area, gestor, modalidade, notebook e perifericos.
+
+O e-mail e o Discord usam a mesma chave de deduplicacao: tipo da tarefa, nome do colaborador e data. Quem chegar primeiro cria o card; quem chegar depois comenta no card existente.
 
 Depois do processamento, o bot cria ou reutiliza a label definida em `GMAIL_PROCESSED_LABEL_NAME` e aplica no e-mail para evitar duplicidade.
 

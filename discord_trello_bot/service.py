@@ -133,7 +133,16 @@ class DiscordTrelloService:
 
         try:
             card_urls: list[str] = []
+            created_count = 0
             for task in parse_result.tasks:
+                if self._is_past_task(task):
+                    LOGGER.info(
+                        "Tarefa da mensagem %s ignorada por estar no passado: %s %s.",
+                        message.id,
+                        task.employee_name,
+                        task.effective_date.isoformat(),
+                    )
+                    continue
                 LOGGER.info(
                     "Tarefa detectada na mensagem %s: %s %s em %s.",
                     message.id,
@@ -141,12 +150,9 @@ class DiscordTrelloService:
                     task.employee_name,
                     task.effective_date.isoformat(),
                 )
-                card = self.trello.create_card_from_template(
-                    card_name=self._build_card_name(task),
-                    due_iso=self._build_due_iso(task.effective_date),
-                    task_type=task.task_type,
-                )
-
+                card, _was_created = self._get_or_create_task_card(task)
+                if _was_created:
+                    created_count += 1
                 card_id = str(card["id"])
                 card_url = str(card["url"])
                 card_urls.append(card_url)
@@ -154,6 +160,9 @@ class DiscordTrelloService:
                     card_id=card_id,
                     text=self._build_trello_comment(task=task, message=message, card_url=card_url),
                 )
+
+            if not card_urls:
+                return "skipped", 0
 
             self.discord.add_reaction(
                 channel_id=message.channel_id,
@@ -168,7 +177,7 @@ class DiscordTrelloService:
                     content=self._build_discord_reply(card_urls),
                 )
 
-            return "created", len(card_urls)
+            return "created", created_count
         except (ApiError, ValueError):
             LOGGER.exception("Falha ao processar a mensagem %s.", message.id)
             return "error", 0
@@ -329,7 +338,17 @@ class DiscordTrelloService:
             return "skipped", 0
 
         try:
+            processed_count = 0
+            created_count = 0
             for task in parse_result.tasks:
+                if self._is_past_task(task):
+                    LOGGER.info(
+                        "Tarefa do e-mail %s ignorada por estar no passado: %s %s.",
+                        email_message.id,
+                        task.employee_name,
+                        task.effective_date.isoformat(),
+                    )
+                    continue
                 LOGGER.info(
                     "Tarefa detectada no e-mail %s: %s %s em %s.",
                     email_message.id,
@@ -337,11 +356,9 @@ class DiscordTrelloService:
                     task.employee_name,
                     task.effective_date.isoformat(),
                 )
-                card = self.trello.create_card_from_template(
-                    card_name=self._build_card_name(task),
-                    due_iso=self._build_due_iso(task.effective_date),
-                    task_type=task.task_type,
-                )
+                card, _was_created = self._get_or_create_task_card(task)
+                if _was_created:
+                    created_count += 1
                 self.trello.add_comment(
                     card_id=str(card["id"]),
                     text=self._build_email_trello_comment(
@@ -350,13 +367,35 @@ class DiscordTrelloService:
                         card_url=str(card["url"]),
                     ),
                 )
+                processed_count += 1
+
+            if processed_count == 0:
+                return "skipped", 0
 
             if self.gmail is not None:
                 self.gmail.mark_processed(email_message.id)
-            return "created", len(parse_result.tasks)
+            return "created", created_count
         except (ApiError, ValueError):
             LOGGER.exception("Falha ao processar e-mail %s.", email_message.id)
             return "error", 0
+
+    def _get_or_create_task_card(self, task: ParsedTask) -> tuple[dict, bool]:
+        card_name = self._build_card_name(task)
+        existing_card = self.trello.find_open_card_by_name(card_name)
+        if existing_card is not None:
+            LOGGER.info("Card existente encontrado no Trello: %s.", card_name)
+            return existing_card, False
+
+        card = self.trello.create_card_from_template(
+            card_name=card_name,
+            due_iso=self._build_due_iso(task.effective_date),
+            task_type=task.task_type,
+        )
+        return card, True
+
+    def _is_past_task(self, task: ParsedTask) -> bool:
+        today = datetime.now(tz=self.settings.timezone).date()
+        return task.effective_date < today
 
     def _build_email_task_message(self, email_message: EmailMessage) -> DiscordMessage:
         content = "\n".join(

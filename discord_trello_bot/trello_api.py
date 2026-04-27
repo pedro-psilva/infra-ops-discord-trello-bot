@@ -18,6 +18,7 @@ class TrelloApiClient(JsonApiClient):
         self._resolved_target_list_id: str | None = None
         self._resolved_onboarding_template_id: str | None = None
         self._resolved_offboarding_template_id: str | None = None
+        self._target_list_cards_cache: list[dict] | None = None
 
     def create_card_from_template(
         self,
@@ -36,7 +37,24 @@ class TrelloApiClient(JsonApiClient):
                 "due": due_iso,
             }
         )
-        return self.request("POST", "cards", params=params)
+        card = self.request("POST", "cards", params=params)
+        self._remember_target_list_card(card)
+        return card
+
+    def find_open_card_by_name(self, card_name: str) -> dict | None:
+        target_list_id = self.resolve_target_list_id()
+        if self._target_list_cards_cache is None:
+            self._target_list_cards_cache = self.request(
+                "GET",
+                f"lists/{target_list_id}/cards",
+                params=self._with_auth({"fields": "id,name,url", "filter": "open"}),
+            )
+
+        target_name = card_name.casefold()
+        for card in self._target_list_cards_cache:
+            if str(card.get("name", "")).casefold() == target_name:
+                return card
+        return None
 
     def add_comment(self, *, card_id: str, text: str) -> dict:
         params = self._with_auth({"text": text})
@@ -57,7 +75,9 @@ class TrelloApiClient(JsonApiClient):
             params["due"] = due_iso
         if desc:
             params["desc"] = desc
-        return self.request("POST", "cards", params=self._with_auth(params))
+        card = self.request("POST", "cards", params=self._with_auth(params))
+        self._remember_target_list_card(card)
+        return card
 
     def _with_auth(self, params: dict[str, object]) -> dict[str, object]:
         return {
@@ -65,6 +85,10 @@ class TrelloApiClient(JsonApiClient):
             "key": self.settings.trello_api_key,
             "token": self.settings.trello_api_token,
         }
+
+    def _remember_target_list_card(self, card: dict) -> None:
+        if self._target_list_cards_cache is not None:
+            self._target_list_cards_cache.append(card)
 
     def resolve_target_list_id(self) -> str:
         if self._resolved_target_list_id:

@@ -70,6 +70,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.parser = Mock()
         service.trello = Mock()
         service.discord = Mock()
+        service.trello.find_open_card_by_name.return_value = None
 
         message = build_message()
         outcome, created_count = service._process_message(
@@ -94,6 +95,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.request_refiner = Mock()
         service.trello = Mock()
         service.discord = Mock()
+        service.trello.find_open_card_by_name.return_value = None
 
         command_message = build_message(
             channel_id="request-channel",
@@ -191,6 +193,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.request_refiner = Mock()
         service.trello = Mock()
         service.discord = Mock()
+        service.trello.find_open_card_by_name.return_value = None
 
         command_message = build_message(
             channel_id="request-channel",
@@ -287,6 +290,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service = DiscordTrelloService(build_settings())
         service.trello = Mock()
         service.gmail = Mock()
+        service.trello.find_open_card_by_name.return_value = None
         service.trello.create_card_from_template.return_value = {
             "id": "card-1",
             "url": "https://trello/card-1",
@@ -319,6 +323,41 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertIn("Endereco: Rua das Flores", comment)
         self.assertIn("CEP: 01000-000", comment)
         service.gmail.mark_processed.assert_called_once_with("email-1")
+
+    def test_email_adds_comment_to_existing_onboarding_card_instead_of_creating_duplicate(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.gmail = Mock()
+        service.trello.find_open_card_by_name.return_value = {
+            "id": "existing-card",
+            "url": "https://trello/existing-card",
+            "name": "[Onboarding] Ana Paula Souza - 05/05/2026",
+        }
+        email_message = EmailMessage(
+            id="email-2",
+            thread_id="thread-2",
+            sender="rh@example.com",
+            subject="Onboarding Ana Paula Souza",
+            body=(
+                "Nome Completo: Ana Paula Souza\n"
+                "Data de Admissao: 05/05/2026\n"
+                "Endereco: Rua das Flores, 123 - Centro - Sao Paulo/SP\n"
+                "Cargo: Analista de Operacoes"
+            ),
+            timestamp=datetime(2026, 4, 24, 10, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=(),
+        )
+
+        outcome, created_count = service._process_email_message(email_message)
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 0)
+        service.trello.create_card_from_template.assert_not_called()
+        service.trello.add_comment.assert_called_once()
+        self.assertEqual(service.trello.add_comment.call_args.kwargs["card_id"], "existing-card")
+        comment = service.trello.add_comment.call_args.kwargs["text"]
+        self.assertIn("Endereco: Rua das Flores", comment)
+        self.assertIn("Cargo: Analista de Operacoes", comment)
 
 
 if __name__ == "__main__":
