@@ -105,7 +105,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         )
         context_message = build_message(
             channel_id="request-channel",
-            content="Precisamos revisar o contrato do fornecedor X",
+            content="Precisamos revisar o contrato do fornecedor X: https://example.com/contrato?draft=1.",
         )
         service.discord.get_message.return_value = context_message
         service.request_parser.parse.return_value = (
@@ -150,6 +150,8 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertIn("Revisar o contrato do fornecedor X com apoio do juridico antes da renovacao.", create_kwargs["desc"])
         self.assertIn("**Solicitante:** RH", create_kwargs["desc"])
         self.assertIn("**Detalhes importantes:**", create_kwargs["desc"])
+        self.assertIn("**Links citados:**", create_kwargs["desc"])
+        self.assertIn("https://example.com/contrato?draft=1", create_kwargs["desc"])
         self.assertNotIn("Contexto de apoio", create_kwargs["desc"])
         service.trello.add_comment.assert_called_once()
         service.discord.add_reaction.assert_called_once()

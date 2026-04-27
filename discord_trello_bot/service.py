@@ -21,6 +21,7 @@ from .trello_api import TrelloApiClient
 LOGGER = logging.getLogger(__name__)
 
 SUPPORTED_MESSAGE_TYPES = {0, 19}
+URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>\"]+", re.IGNORECASE)
 
 
 class DiscordTrelloService:
@@ -235,6 +236,7 @@ class DiscordTrelloService:
                 desc=self._build_requested_card_desc(
                     requested_card=requested_card,
                     command_message=message,
+                    context_messages=selected_context_messages,
                 ),
             )
             card_id = str(card["id"])
@@ -575,6 +577,7 @@ class DiscordTrelloService:
         *,
         requested_card: RequestedCard,
         command_message: DiscordMessage,
+        context_messages: list[DiscordMessage] | None = None,
     ) -> str:
         local_timestamp = command_message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
         prazo = requested_card.due_date.strftime("%d/%m/%Y") if requested_card.due_date else "Sem prazo definido"
@@ -589,6 +592,11 @@ class DiscordTrelloService:
         context = requested_card.context_excerpt
         if context:
             lines.extend(["", "**Detalhes importantes:**", context])
+
+        cited_links = _extract_urls_from_messages([command_message, *(context_messages or [])])
+        if cited_links:
+            lines.extend(["", "**Links citados:**"])
+            lines.extend(f"- {link}" for link in cited_links)
         return "\n".join(lines)
 
     def _build_request_trello_comment(
@@ -737,6 +745,24 @@ def _extract_complement_notes(text: str) -> list[str]:
     if notes:
         return notes
     return [_compact_comment_text(text)]
+
+
+def _extract_urls_from_messages(messages: list[DiscordMessage]) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        for match in URL_PATTERN.finditer(message.content):
+            url = match.group(0).rstrip(".,;:!?)]}'\"")
+            if not url:
+                continue
+            if url.startswith("www."):
+                url = f"https://{url}"
+            normalized = url.casefold()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            urls.append(url)
+    return urls
 
 
 def _compact_comment_text(text: str) -> str:
