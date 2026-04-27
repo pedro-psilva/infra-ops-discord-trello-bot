@@ -37,6 +37,10 @@ class Settings:
     trello_api_base_url: str = "https://api.trello.com/1"
     request_timeout_seconds: float = 30.0
     max_retries: int = 5
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5.5"
+    openai_reasoning_effort: str = "medium"
+    openai_api_base_url: str = "https://api.openai.com/v1"
 
 
 def _require_env(name: str) -> str:
@@ -103,6 +107,18 @@ def _confirmation_mode_env() -> ConfirmationMode:
         ) from exc
 
 
+def _openai_reasoning_effort_env() -> str:
+    raw = os.getenv("OPENAI_REASONING_EFFORT", "medium").strip().lower() or "medium"
+    allowed = {"none", "minimal", "low", "medium", "high", "xhigh"}
+    if raw not in allowed:
+        allowed_values = ", ".join(sorted(allowed))
+        raise ValueError(
+            "OPENAI_REASONING_EFFORT invalido: "
+            f"{raw}. Valores aceitos: {allowed_values}."
+        )
+    return raw
+
+
 def load_settings(*, lookback_days_override: int | None = None) -> Settings:
     lookback_days = lookback_days_override or _int_env("LOOKBACK_DAYS", 7)
     discord_channel_ids = _csv_optional_env("DISCORD_CHANNEL_IDS")
@@ -146,4 +162,7 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         lookback_days=lookback_days,
         max_messages_per_channel=_int_env("MAX_MESSAGES_PER_CHANNEL", 500),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
+        openai_api_key=_optional_env("OPENAI_API_KEY"),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.5").strip() or "gpt-5.5",
+        openai_reasoning_effort=_openai_reasoning_effort_env(),
     )

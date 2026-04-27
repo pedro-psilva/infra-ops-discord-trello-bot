@@ -9,6 +9,7 @@ from .config import ConfirmationMode, Settings
 from .discord_api import DiscordApiClient, build_discord_message_url
 from .http import ApiError
 from .models import DiscordMessage, ParsedTask, RequestedCard, RunSummary
+from .openai_request_refiner import OpenAIRequestRefiner
 from .parser import TaskParser
 from .request_parser import RequestParser
 from .trello_api import TrelloApiClient
@@ -26,6 +27,11 @@ class DiscordTrelloService:
         self.trello = TrelloApiClient(settings)
         self.parser = TaskParser(settings)
         self.request_parser = RequestParser(settings)
+        self.request_refiner = (
+            OpenAIRequestRefiner(settings)
+            if settings.openai_api_key
+            else None
+        )
 
     def run(self) -> RunSummary:
         summary = RunSummary()
@@ -193,6 +199,11 @@ class DiscordTrelloService:
             return "skipped", 0
 
         try:
+            requested_card = self._refine_requested_card(
+                requested_card=requested_card,
+                command_message=message,
+                selected_context_messages=selected_context_messages,
+            )
             card = self.trello.create_card(
                 card_name=self._build_requested_card_name(requested_card),
                 due_iso=(
@@ -236,6 +247,35 @@ class DiscordTrelloService:
         except (ApiError, ValueError):
             LOGGER.exception("Falha ao processar pedido com mencao na mensagem %s.", message.id)
             return "error", 0
+
+    def _refine_requested_card(
+        self,
+        *,
+        requested_card: RequestedCard,
+        command_message: DiscordMessage,
+        selected_context_messages: list[DiscordMessage],
+    ) -> RequestedCard:
+        if self.request_refiner is None:
+            return requested_card
+        try:
+            refined = self.request_refiner.refine(
+                requested_card=requested_card,
+                command_message=command_message,
+                context_messages=selected_context_messages,
+            )
+        except (ApiError, ValueError):
+            LOGGER.exception(
+                "Falha ao refinar pedido com OpenAI na mensagem %s. Seguindo com heuristica local.",
+                command_message.id,
+            )
+            return requested_card
+
+        LOGGER.info(
+            "Pedido por mencao refinado com OpenAI na mensagem %s. titulo=%s",
+            command_message.id,
+            refined.title,
+        )
+        return refined
 
     def _should_consider_message(self, message: DiscordMessage) -> bool:
         if message.author_is_bot or message.webhook_id:

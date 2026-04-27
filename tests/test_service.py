@@ -91,6 +91,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service = DiscordTrelloService(build_settings())
         service.parser = Mock()
         service.request_parser = Mock()
+        service.request_refiner = Mock()
         service.trello = Mock()
         service.discord = Mock()
 
@@ -117,6 +118,14 @@ class DiscordTrelloServiceTests(unittest.TestCase):
             [context_message],
             None,
         )
+        service.request_refiner.refine.return_value = RequestedCard(
+            title="Revisar contrato do fornecedor X com juridico",
+            summary="Revisar o contrato do fornecedor X com apoio do juridico antes da renovacao.",
+            due_date=datetime(2026, 4, 27).date(),
+            instruction="crie um card sobre isso para segunda feira",
+            source_excerpt=context_message.content,
+            context_excerpt="Validar ajustes no aditivo antes de fechar a renovacao.",
+        )
         service.trello.create_card.return_value = {"id": "card-1", "url": "https://trello/card-1"}
 
         outcome, created_count = service._process_message(
@@ -131,11 +140,12 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertEqual(outcome, "created")
         self.assertEqual(created_count, 1)
         service.request_parser.parse.assert_called_once()
+        service.request_refiner.refine.assert_called_once()
         service.trello.create_card.assert_called_once()
         create_kwargs = service.trello.create_card.call_args.kwargs
-        self.assertEqual(create_kwargs["card_name"], "Revisar contrato do fornecedor X")
+        self.assertEqual(create_kwargs["card_name"], "Revisar contrato do fornecedor X com juridico")
         self.assertIn("**Resumo da solicitacao:**", create_kwargs["desc"])
-        self.assertIn("Revisar o contrato do fornecedor X antes da renovacao.", create_kwargs["desc"])
+        self.assertIn("Revisar o contrato do fornecedor X com apoio do juridico antes da renovacao.", create_kwargs["desc"])
         self.assertIn("**Solicitante:** RH", create_kwargs["desc"])
         self.assertIn("**Detalhes importantes:**", create_kwargs["desc"])
         self.assertNotIn("Contexto de apoio", create_kwargs["desc"])
@@ -178,6 +188,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service = DiscordTrelloService(build_settings())
         service.parser = Mock()
         service.request_parser = Mock()
+        service.request_refiner = Mock()
         service.trello = Mock()
         service.discord = Mock()
 
@@ -204,6 +215,14 @@ class DiscordTrelloServiceTests(unittest.TestCase):
             [context_message],
             None,
         )
+        service.request_refiner.refine.return_value = RequestedCard(
+            title="Revisar contrato do fornecedor X",
+            summary="Revisar o contrato do fornecedor X antes da renovacao.",
+            due_date=datetime(2026, 4, 27).date(),
+            instruction="crie um card sobre isso para segunda feira",
+            source_excerpt=context_message.content,
+            context_excerpt="O juridico pediu os ajustes no aditivo antes da renovacao.",
+        )
         service.trello.create_card.return_value = {"id": "card-1", "url": "https://trello/card-1"}
 
         outcome, created_count = service._process_message(
@@ -218,6 +237,51 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertEqual(outcome, "created")
         self.assertEqual(created_count, 1)
         service.request_parser.parse.assert_called_once()
+
+    def test_request_falls_back_to_heuristic_when_openai_refiner_fails(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.parser = Mock()
+        service.request_parser = Mock()
+        service.request_refiner = Mock()
+        service.trello = Mock()
+        service.discord = Mock()
+
+        command_message = build_message(
+            channel_id="request-channel",
+            content="<@bot> crie um card sobre isso para segunda feira",
+            referenced_message_id="source-1",
+            mentioned_user_ids=("bot-1",),
+        )
+        context_message = build_message(
+            channel_id="request-channel",
+            content="Precisamos revisar o contrato do fornecedor X",
+        )
+        heuristic_card = RequestedCard(
+            title="Revisar contrato do fornecedor X",
+            summary="Revisar o contrato do fornecedor X antes da renovacao.",
+            due_date=datetime(2026, 4, 27).date(),
+            instruction="crie um card sobre isso para segunda feira",
+            source_excerpt=context_message.content,
+            context_excerpt="O juridico pediu os ajustes no aditivo antes da renovacao.",
+        )
+        service.discord.get_message.return_value = context_message
+        service.request_parser.parse.return_value = (heuristic_card, [context_message], None)
+        service.request_refiner.refine.side_effect = ValueError("falha simulada")
+        service.trello.create_card.return_value = {"id": "card-1", "url": "https://trello/card-1"}
+
+        outcome, created_count = service._process_message(
+            command_message,
+            channel_messages=[context_message, command_message],
+            bot_reply_reference_ids=set(),
+            modes={"request"},
+            bot_user_id="bot-1",
+            bot_role_ids=set(),
+        )
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 1)
+        create_kwargs = service.trello.create_card.call_args.kwargs
+        self.assertEqual(create_kwargs["card_name"], "Revisar contrato do fornecedor X")
 
 
 if __name__ == "__main__":

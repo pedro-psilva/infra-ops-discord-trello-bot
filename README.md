@@ -22,6 +22,7 @@ Para ficar o mais perto possivel de custo zero, o projeto foi estruturado para r
    - le a cadeia da mensagem respondida e, no minimo, todas as mensagens dos ultimos 60 minutos antes do pedido
    - recorta automaticamente onde o assunto comeca e termina com base em proximidade temporal, participantes e termos em comum
    - interpreta o prazo pedido
+   - se `OPENAI_API_KEY` estiver configurada, usa a OpenAI apenas nesse fluxo para refinar titulo, resumo e detalhes do card
    - cria um card generico na lista de destino do Trello
    - adiciona comentario com o pedido e o contexto lido
    - reage com `✅`
@@ -82,6 +83,9 @@ Copie `.env.example` para `.env` quando for rodar localmente.
 | `TRELLO_ONBOARDING_TEMPLATE_CARD_REF` | Sim | ID ou URL do card template de onboarding |
 | `TRELLO_OFFBOARDING_TEMPLATE_CARD_REF` | Sim | ID ou URL do card template de offboarding |
 | `TRELLO_KEEP_FROM_SOURCE` | Nao | Campos copiados do template |
+| `OPENAI_API_KEY` | Nao | Chave da OpenAI. Se presente, refina apenas os cards criados por mencao |
+| `OPENAI_MODEL` | Nao | Modelo da OpenAI usado nos pedidos por mencao. Padrao `gpt-5.5` |
+| `OPENAI_REASONING_EFFORT` | Nao | Esforco de raciocinio da OpenAI. Padrao `medium` |
 | `BOT_TIMEZONE` | Nao | Timezone IANA, padrao `America/Sao_Paulo` |
 | `LOOKBACK_DAYS` | Nao | Janela de busca de mensagens |
 | `MAX_MESSAGES_PER_CHANNEL` | Nao | Limite de mensagens paginadas por execucao |
@@ -132,12 +136,30 @@ No repositorio do GitHub, crie os seguintes repository secrets:
 - `TRELLO_ONBOARDING_TEMPLATE_CARD_REF`
 - `TRELLO_OFFBOARDING_TEMPLATE_CARD_REF`
 - `TRELLO_KEEP_FROM_SOURCE`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_REASONING_EFFORT`
 - `BOT_TIMEZONE`
 - `LOOKBACK_DAYS`
 - `MAX_MESSAGES_PER_CHANNEL`
 - `LOG_LEVEL`
 
 Se preferir, voce pode preencher so os obrigatorios e deixar os opcionais sem criar secret. Nesse caso, remova do workflow as linhas dos segredos opcionais ou troque por valores fixos.
+
+## OpenAI no fluxo por mencao
+
+Se voce quiser que o bot use LLM apenas quando for chamado por `@bot` ou `@Infra Ops`, configure:
+
+- localmente no `.env`:
+  - `OPENAI_API_KEY`
+  - `OPENAI_MODEL=gpt-5.5`
+  - `OPENAI_REASONING_EFFORT=medium`
+- em producao no GitHub:
+  - `Settings > Secrets and variables > Actions > New repository secret`
+  - crie o secret `OPENAI_API_KEY`
+  - opcionalmente crie `OPENAI_MODEL` e `OPENAI_REASONING_EFFORT`
+
+O fluxo estruturado diario de onboarding/offboarding continua sem OpenAI.
 
 ## Como pegar IDs rapidamente
 
@@ -175,3 +197,8 @@ Se as mensagens reais tiverem outro formato, me passe 2 ou 3 exemplos reais e eu
 - GitHub Actions events/schedule: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 - GitHub Actions secrets: https://docs.github.com/actions/security-guides/encrypted-secrets
 - GitHub Actions billing: https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions
+- OpenAI Models: https://developers.openai.com/api/docs/models
+- OpenAI Quickstart / API key: https://developers.openai.com/api/docs/quickstart
+- OpenAI Responses API: https://platform.openai.com/docs/api-reference/responses
+- OpenAI Structured Outputs: https://platform.openai.com/docs/guides/structured-outputs
+- OpenAI Reasoning models: https://developers.openai.com/api/docs/guides/reasoning
