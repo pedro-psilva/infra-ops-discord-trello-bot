@@ -80,6 +80,25 @@ class TaskParserTests(unittest.TestCase):
         self.assertEqual(result.task.employee_name, "Simone Tolisano Meirelles")
         self.assertEqual(result.task.effective_date.isoformat(), "2026-04-27")
 
+    def test_parse_onboarding_keeps_address_as_note(self) -> None:
+        message = build_message(
+            "Onboarding\n"
+            "Nome Completo: Ana Paula Souza\n"
+            "Data de Admissao: 05/05/2026\n"
+            "Endereco: Rua das Flores, 123 - Centro - Sao Paulo/SP\n"
+            "CEP: 01000-000\n"
+            "Telefone: (11) 99999-9999\n"
+            "Cargo: Analista de Operacoes"
+        )
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Ana Paula Souza")
+        self.assertTrue(any("Endereco:" in note for note in result.task.notes))
+        self.assertTrue(any("CEP:" in note for note in result.task.notes))
+        self.assertTrue(any("Telefone:" in note for note in result.task.notes))
+
     def test_parse_inline_offboarding(self) -> None:
         message = build_message("Offboarding Joao Souza dia 30/04/2026. Vai devolver por Uber.")
         result = self.parser.parse_message(message)

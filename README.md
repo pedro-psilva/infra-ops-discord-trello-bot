@@ -15,7 +15,7 @@ Para ficar o mais perto possivel de custo zero, o projeto foi estruturado para r
    - copia o template correto do Trello com `idCardSource`
    - define o nome do card
    - define a data no card
-   - adiciona um comentario com resumo, observacoes detectadas e link da mensagem no Discord
+   - adiciona um comentario com resumo, observacoes detectadas, informacoes adicionais e link da mensagem no Discord
    - reage com `✅` na mensagem
 5. Nos canais de pedido por mencao, quando alguem responde uma mensagem com algo como `@Bot, crie um card sobre isso para segunda feira`, o bot:
    - aceita tanto mencao direta ao usuario do bot quanto mencao ao cargo do bot no Discord
@@ -27,6 +27,7 @@ Para ficar o mais perto possivel de custo zero, o projeto foi estruturado para r
    - adiciona comentario com o pedido e o contexto lido
    - reage com `✅`
 6. Se estiver configurado `DISCORD_CONFIRMATION_MODE=reply` ou `both`, o bot tambem responde com o link do card.
+7. Se as credenciais do Gmail estiverem configuradas, o scan diario tambem le e-mails de onboarding, cria cards a partir do template e marca o e-mail com a label de processado.
 
 O parser e conservador de proposito: se nome ou data nao forem detectados, ele nao cria card.
 
@@ -62,6 +63,20 @@ O parser e conservador de proposito: se nome ou data nao forem detectados, ele n
    - `TRELLO_ONBOARDING_TEMPLATE_CARD_REF`
    - `TRELLO_OFFBOARDING_TEMPLATE_CARD_REF`
 
+### Gmail
+
+Para conectar a conta `pedro.paulo@iebtinnovation.com`, use Gmail API com OAuth 2.0 e escopo `https://www.googleapis.com/auth/gmail.modify`. O bot precisa desse escopo para ler mensagens e aplicar a label de processado depois de criar o card.
+
+Configure:
+
+- `GMAIL_USER_EMAIL`
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `GMAIL_REFRESH_TOKEN`
+- `GMAIL_QUERY`
+- `GMAIL_PROCESSED_LABEL_NAME`
+- `GMAIL_MAX_RESULTS`
+
 ## Variaveis de ambiente
 
 Copie `.env.example` para `.env` quando for rodar localmente.
@@ -86,6 +101,13 @@ Copie `.env.example` para `.env` quando for rodar localmente.
 | `OPENAI_API_KEY` | Nao | Chave da OpenAI. Se presente, refina apenas os cards criados por mencao |
 | `OPENAI_MODEL` | Nao | Modelo da OpenAI usado nos pedidos por mencao. Padrao `gpt-5.5` |
 | `OPENAI_REASONING_EFFORT` | Nao | Esforco de raciocinio da OpenAI. Padrao `medium` |
+| `GMAIL_USER_EMAIL` | Nao | Conta Gmail/Google Workspace monitorada, por exemplo `pedro.paulo@iebtinnovation.com` |
+| `GMAIL_CLIENT_ID` | Nao | OAuth Client ID do Google Cloud |
+| `GMAIL_CLIENT_SECRET` | Nao | OAuth Client Secret do Google Cloud |
+| `GMAIL_REFRESH_TOKEN` | Nao | Refresh token OAuth com escopo Gmail modify |
+| `GMAIL_QUERY` | Nao | Busca usada para e-mails de onboarding |
+| `GMAIL_PROCESSED_LABEL_NAME` | Nao | Label aplicada depois do processamento |
+| `GMAIL_MAX_RESULTS` | Nao | Maximo de e-mails lidos por execucao |
 | `BOT_TIMEZONE` | Nao | Timezone IANA, padrao `America/Sao_Paulo` |
 | `LOOKBACK_DAYS` | Nao | Janela de busca de mensagens |
 | `MAX_MESSAGES_PER_CHANNEL` | Nao | Limite de mensagens paginadas por execucao |
@@ -139,6 +161,13 @@ No repositorio do GitHub, crie os seguintes repository secrets:
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_REASONING_EFFORT`
+- `GMAIL_USER_EMAIL`
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `GMAIL_REFRESH_TOKEN`
+- `GMAIL_QUERY`
+- `GMAIL_PROCESSED_LABEL_NAME`
+- `GMAIL_MAX_RESULTS`
 - `BOT_TIMEZONE`
 - `LOOKBACK_DAYS`
 - `MAX_MESSAGES_PER_CHANNEL`
@@ -160,6 +189,12 @@ Se voce quiser que o bot use LLM apenas quando for chamado por `@bot` ou `@Infra
   - opcionalmente crie `OPENAI_MODEL` e `OPENAI_REASONING_EFFORT`
 
 O fluxo estruturado diario de onboarding/offboarding continua sem OpenAI.
+
+## Gmail no fluxo diario
+
+Quando `GMAIL_USER_EMAIL`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` e `GMAIL_REFRESH_TOKEN` estiverem configurados, o workflow diario tambem busca e-mails pelo `GMAIL_QUERY`. Ao criar os cards, o bot adiciona no comentario informacoes adicionais encontradas no e-mail, como endereco, CEP, telefone, cargo, area, gestor, modalidade, notebook e perifericos.
+
+Depois do processamento, o bot cria ou reutiliza a label definida em `GMAIL_PROCESSED_LABEL_NAME` e aplica no e-mail para evitar duplicidade.
 
 ## Como pegar IDs rapidamente
 
@@ -197,6 +232,10 @@ Se as mensagens reais tiverem outro formato, me passe 2 ou 3 exemplos reais e eu
 - GitHub Actions events/schedule: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 - GitHub Actions secrets: https://docs.github.com/actions/security-guides/encrypted-secrets
 - GitHub Actions billing: https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions
+- Gmail API Python quickstart: https://developers.google.com/gmail/api/quickstart/python
+- Gmail API messages.list: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list
+- Gmail API messages.modify: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/modify
+- Google OAuth 2.0 installed apps: https://developers.google.com/identity/protocols/oauth2/native-app
 - OpenAI Models: https://developers.openai.com/api/docs/models
 - OpenAI Quickstart / API key: https://developers.openai.com/api/docs/quickstart
 - OpenAI Responses API: https://platform.openai.com/docs/api-reference/responses

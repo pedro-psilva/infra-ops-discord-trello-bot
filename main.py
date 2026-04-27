@@ -39,9 +39,10 @@ def main() -> int:
     summary = service.run()
 
     logging.getLogger(__name__).info(
-        "Execucao concluida. canais=%s mensagens=%s tarefas=%s cards=%s ja_confirmadas=%s ignoradas=%s erros=%s",
+        "Execucao concluida. canais=%s mensagens=%s emails=%s tarefas=%s cards=%s ja_confirmadas=%s ignoradas=%s erros=%s",
         summary.channels_scanned,
         summary.messages_scanned,
+        summary.emails_scanned,
         summary.tasks_parsed,
         summary.cards_created,
         summary.messages_already_confirmed,

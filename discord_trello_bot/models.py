@@ -100,6 +100,17 @@ class ParsedTask:
 
 
 @dataclass(frozen=True)
+class EmailMessage:
+    id: str
+    thread_id: str
+    sender: str
+    subject: str
+    body: str
+    timestamp: datetime
+    label_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RequestedCard:
     title: str
     summary: str
@@ -123,6 +134,7 @@ class ParseResult:
 class RunSummary:
     channels_scanned: int = 0
     messages_scanned: int = 0
+    emails_scanned: int = 0
     tasks_parsed: int = 0
     cards_created: int = 0
     messages_already_confirmed: int = 0

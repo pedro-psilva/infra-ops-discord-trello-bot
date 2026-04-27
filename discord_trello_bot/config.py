@@ -41,6 +41,13 @@ class Settings:
     openai_model: str = "gpt-5.5"
     openai_reasoning_effort: str = "medium"
     openai_api_base_url: str = "https://api.openai.com/v1"
+    gmail_user_email: str | None = None
+    gmail_client_id: str | None = None
+    gmail_client_secret: str | None = None
+    gmail_refresh_token: str | None = None
+    gmail_query: str = "newer_than:7d (onboarding OR admissao OR admissão OR contratação)"
+    gmail_processed_label_name: str = "Infra Ops Processado"
+    gmail_max_results: int = 10
 
 
 def _require_env(name: str) -> str:
@@ -119,8 +126,23 @@ def _openai_reasoning_effort_env() -> str:
     return raw
 
 
+def _gmail_env() -> tuple[str | None, str | None, str | None, str | None]:
+    user_email = _optional_env("GMAIL_USER_EMAIL")
+    client_id = _optional_env("GMAIL_CLIENT_ID")
+    client_secret = _optional_env("GMAIL_CLIENT_SECRET")
+    refresh_token = _optional_env("GMAIL_REFRESH_TOKEN")
+    values = (user_email, client_id, client_secret, refresh_token)
+    if any(values) and not all(values):
+        raise ValueError(
+            "Para ativar Gmail, defina GMAIL_USER_EMAIL, GMAIL_CLIENT_ID, "
+            "GMAIL_CLIENT_SECRET e GMAIL_REFRESH_TOKEN."
+        )
+    return values
+
+
 def load_settings(*, lookback_days_override: int | None = None) -> Settings:
     lookback_days = lookback_days_override or _int_env("LOOKBACK_DAYS", 7)
+    gmail_user_email, gmail_client_id, gmail_client_secret, gmail_refresh_token = _gmail_env()
     discord_channel_ids = _csv_optional_env("DISCORD_CHANNEL_IDS")
     discord_request_channel_ids = _csv_optional_env("DISCORD_REQUEST_CHANNEL_IDS")
     if not discord_channel_ids and not discord_request_channel_ids:
@@ -165,4 +187,19 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         openai_api_key=_optional_env("OPENAI_API_KEY"),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.5").strip() or "gpt-5.5",
         openai_reasoning_effort=_openai_reasoning_effort_env(),
+        gmail_user_email=gmail_user_email,
+        gmail_client_id=gmail_client_id,
+        gmail_client_secret=gmail_client_secret,
+        gmail_refresh_token=gmail_refresh_token,
+        gmail_query=os.getenv(
+            "GMAIL_QUERY",
+            "newer_than:7d (onboarding OR admissao OR admissão OR contratação)",
+        ).strip()
+        or "newer_than:7d (onboarding OR admissao OR admissão OR contratação)",
+        gmail_processed_label_name=os.getenv(
+            "GMAIL_PROCESSED_LABEL_NAME",
+            "Infra Ops Processado",
+        ).strip()
+        or "Infra Ops Processado",
+        gmail_max_results=_int_env("GMAIL_MAX_RESULTS", 10),
     )

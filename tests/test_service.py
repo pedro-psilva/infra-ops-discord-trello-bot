@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 from discord_trello_bot.config import ConfirmationMode, Settings
-from discord_trello_bot.models import DiscordMessage, RequestedCard
+from discord_trello_bot.models import DiscordMessage, EmailMessage, RequestedCard
 from discord_trello_bot.service import DiscordTrelloService
 
 
@@ -282,6 +282,43 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertEqual(created_count, 1)
         create_kwargs = service.trello.create_card.call_args.kwargs
         self.assertEqual(create_kwargs["card_name"], "Revisar contrato do fornecedor X")
+
+    def test_create_onboarding_card_from_email_with_address_notes(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.gmail = Mock()
+        service.trello.create_card_from_template.return_value = {
+            "id": "card-1",
+            "url": "https://trello/card-1",
+        }
+        email_message = EmailMessage(
+            id="email-1",
+            thread_id="thread-1",
+            sender="rh@example.com",
+            subject="Onboarding Ana Paula Souza",
+            body=(
+                "Nome Completo: Ana Paula Souza\n"
+                "Data de Admissao: 05/05/2026\n"
+                "Endereco: Rua das Flores, 123 - Centro - Sao Paulo/SP\n"
+                "CEP: 01000-000\n"
+                "Telefone: (11) 99999-9999"
+            ),
+            timestamp=datetime(2026, 4, 24, 10, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=(),
+        )
+
+        outcome, created_count = service._process_email_message(email_message)
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 1)
+        service.trello.create_card_from_template.assert_called_once()
+        service.trello.add_comment.assert_called_once()
+        comment = service.trello.add_comment.call_args.kwargs["text"]
+        self.assertIn("Origem no e-mail:", comment)
+        self.assertIn("Informacoes adicionais detectadas:", comment)
+        self.assertIn("Endereco: Rua das Flores", comment)
+        self.assertIn("CEP: 01000-000", comment)
+        service.gmail.mark_processed.assert_called_once_with("email-1")
 
 
 if __name__ == "__main__":

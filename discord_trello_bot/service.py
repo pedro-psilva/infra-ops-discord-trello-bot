@@ -7,8 +7,9 @@ UTC = _tz.utc
 
 from .config import ConfirmationMode, Settings
 from .discord_api import DiscordApiClient, build_discord_message_url
+from .gmail_api import GmailApiClient
 from .http import ApiError
-from .models import DiscordMessage, ParsedTask, RequestedCard, RunSummary
+from .models import DiscordMessage, EmailMessage, ParsedTask, RequestedCard, RunSummary
 from .openai_request_refiner import OpenAIRequestRefiner
 from .parser import TaskParser
 from .request_parser import RequestParser
@@ -30,6 +31,11 @@ class DiscordTrelloService:
         self.request_refiner = (
             OpenAIRequestRefiner(settings)
             if settings.openai_api_key
+            else None
+        )
+        self.gmail = (
+            GmailApiClient(settings)
+            if settings.gmail_user_email
             else None
         )
 
@@ -82,6 +88,7 @@ class DiscordTrelloService:
                 elif outcome == "error":
                     summary.errors += 1
 
+        self._process_gmail_messages(summary)
         return summary
 
     def _process_message(
@@ -286,6 +293,94 @@ class DiscordTrelloService:
             return False
         return True
 
+    def _process_gmail_messages(self, summary: RunSummary) -> None:
+        if self.gmail is None:
+            return
+
+        LOGGER.info("Processando e-mails do Gmail para %s.", self.settings.gmail_user_email)
+        try:
+            processed_label_id = self.gmail.processed_label_id()
+            messages = self.gmail.list_messages()
+        except (ApiError, ValueError):
+            summary.errors += 1
+            LOGGER.exception("Falha ao listar mensagens do Gmail.")
+            return
+
+        for email_message in messages:
+            summary.emails_scanned += 1
+            if processed_label_id in email_message.label_ids:
+                LOGGER.info("E-mail %s ja possui label de processado.", email_message.id)
+                continue
+
+            outcome, created_count = self._process_email_message(email_message)
+            if outcome == "created":
+                summary.tasks_parsed += created_count
+                summary.cards_created += created_count
+            elif outcome == "skipped":
+                summary.messages_skipped += 1
+            elif outcome == "error":
+                summary.errors += 1
+
+    def _process_email_message(self, email_message: EmailMessage) -> tuple[str, int]:
+        synthetic_message = self._build_email_task_message(email_message)
+        parse_result = self.parser.parse_message(synthetic_message)
+        if not parse_result.tasks:
+            LOGGER.info("E-mail %s ignorado: %s.", email_message.id, parse_result.reason)
+            return "skipped", 0
+
+        try:
+            for task in parse_result.tasks:
+                LOGGER.info(
+                    "Tarefa detectada no e-mail %s: %s %s em %s.",
+                    email_message.id,
+                    task.task_type.value,
+                    task.employee_name,
+                    task.effective_date.isoformat(),
+                )
+                card = self.trello.create_card_from_template(
+                    card_name=self._build_card_name(task),
+                    due_iso=self._build_due_iso(task.effective_date),
+                    task_type=task.task_type,
+                )
+                self.trello.add_comment(
+                    card_id=str(card["id"]),
+                    text=self._build_email_trello_comment(
+                        task=task,
+                        email_message=email_message,
+                        card_url=str(card["url"]),
+                    ),
+                )
+
+            if self.gmail is not None:
+                self.gmail.mark_processed(email_message.id)
+            return "created", len(parse_result.tasks)
+        except (ApiError, ValueError):
+            LOGGER.exception("Falha ao processar e-mail %s.", email_message.id)
+            return "error", 0
+
+    def _build_email_task_message(self, email_message: EmailMessage) -> DiscordMessage:
+        content = "\n".join(
+            part
+            for part in (email_message.subject, email_message.body)
+            if part.strip()
+        )
+        return DiscordMessage(
+            id=email_message.id,
+            channel_id="gmail",
+            content=content,
+            timestamp=email_message.timestamp,
+            author_id=email_message.sender,
+            author_name=email_message.sender or self.settings.gmail_user_email or "Gmail",
+            author_is_bot=False,
+            message_type=0,
+            webhook_id=None,
+            referenced_channel_id=None,
+            referenced_message_id=None,
+            mentioned_user_ids=(),
+            mentioned_role_ids=(),
+            reactions=(),
+        )
+
     def _build_card_name(self, task: ParsedTask) -> str:
         date_label = task.effective_date.strftime("%d/%m/%Y")
         return f"[{task.task_type.label_pt_br}] {task.employee_name} - {date_label}"
@@ -328,6 +423,37 @@ class DiscordTrelloService:
             lines.extend(f"- {note}" for note in task.notes)
 
         lines.extend(["", "Mensagem original:", task.raw_excerpt])
+        return "\n".join(lines)
+
+    def _build_email_trello_comment(
+        self,
+        *,
+        task: ParsedTask,
+        email_message: EmailMessage,
+        card_url: str,
+    ) -> str:
+        local_timestamp = email_message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
+        lines = [
+            "Origem no e-mail:",
+            f"- Conta: {self.settings.gmail_user_email}",
+            f"- Remetente: {email_message.sender or 'Nao identificado'}",
+            f"- Assunto: {email_message.subject or 'Sem assunto'}",
+            f"- Enviado em: {local_timestamp}",
+            f"- Gmail message ID: {email_message.id}",
+            "",
+            "Resumo interpretado:",
+            f"- Tipo: {task.task_type.label_pt_br}",
+            f"- Colaborador: {task.employee_name}",
+            f"- Data: {task.effective_date.strftime('%d/%m/%Y')}",
+            "",
+            f"Card criado: {card_url}",
+        ]
+
+        if task.notes:
+            lines.extend(["", "Informacoes adicionais detectadas:"])
+            lines.extend(f"- {note}" for note in task.notes)
+
+        lines.extend(["", "Conteudo original:", task.raw_excerpt])
         return "\n".join(lines)
 
     def _build_requested_card_desc(
