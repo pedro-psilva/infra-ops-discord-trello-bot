@@ -160,6 +160,16 @@ class TaskParserTests(unittest.TestCase):
         assert result.task is not None
         self.assertEqual(result.task.effective_date.isoformat(), "2026-04-14")
 
+    def test_parse_offboarding_name_before_dash_date(self) -> None:
+        message = build_message("Offboarding Jucilene Aparecida - 27/04")
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.task_type, TaskType.OFFBOARDING)
+        self.assertEqual(result.task.employee_name, "Jucilene Aparecida")
+        self.assertEqual(result.task.effective_date.isoformat(), "2026-04-27")
+
 
 if __name__ == "__main__":
     unittest.main()

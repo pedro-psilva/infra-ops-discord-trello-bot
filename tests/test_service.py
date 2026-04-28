@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
@@ -473,6 +473,53 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertEqual(outcome, "skipped")
         self.assertEqual(created_count, 0)
         service.trello.add_comment.assert_not_called()
+
+    def test_recent_offboarding_with_yesterday_date_is_created(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.discord = Mock()
+        service.trello.find_open_card_by_name.return_value = None
+        service.trello.create_card_from_template.return_value = {
+            "id": "card-offboarding",
+            "url": "https://trello/card-offboarding",
+        }
+        today = datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
+        yesterday = today - timedelta(days=1)
+        message = build_message(
+            content=f"Offboarding Jucilene Aparecida - {yesterday.strftime('%d/%m')}",
+            hour=12,
+            minute=25,
+        )
+        message = DiscordMessage(
+            **{
+                **message.__dict__,
+                "timestamp": datetime.combine(
+                    today,
+                    datetime.min.time().replace(hour=12, minute=25),
+                    tzinfo=ZoneInfo("America/Sao_Paulo"),
+                ),
+            }
+        )
+
+        outcome, created_count = service._process_message(
+            message,
+            channel_messages=[message],
+            bot_reply_reference_ids=set(),
+            modes={"structured"},
+            bot_user_id=None,
+            bot_role_ids=set(),
+        )
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 1)
+        create_kwargs = service.trello.create_card_from_template.call_args.kwargs
+        self.assertEqual(create_kwargs["task_type"], TaskType.OFFBOARDING)
+        self.assertEqual(
+            create_kwargs["card_name"],
+            f"[Offboarding] Jucilene Aparecida - {yesterday.strftime('%d/%m/%Y')}",
+        )
+        service.trello.add_comment.assert_called_once()
+        service.discord.add_reaction.assert_called_once()
 
 
 if __name__ == "__main__":

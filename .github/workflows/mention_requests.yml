@@ -1,4 +1,4 @@
-name: Discord Mention Requests
+name: Frequent Discord Scan
 
 on:
   workflow_dispatch:
@@ -25,11 +25,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Run bot for mention requests
+      - name: Run frequent Discord scan
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
-          DISCORD_CHANNEL_IDS: ""
+          DISCORD_CHANNEL_IDS: ${{ secrets.DISCORD_CHANNEL_IDS }}
           DISCORD_REQUEST_CHANNEL_IDS: ${{ secrets.DISCORD_REQUEST_CHANNEL_IDS }}
           DISCORD_CONFIRMATION_MODE: ${{ secrets.DISCORD_CONFIRMATION_MODE }}
           DISCORD_REACTION_EMOJI: ${{ secrets.DISCORD_REACTION_EMOJI }}

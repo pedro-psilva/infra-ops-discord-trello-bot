@@ -374,6 +374,11 @@ def _clean_name(raw: str) -> str | None:
     name = raw.strip(" .,-:;|/\t")
     name = name.strip("*_`")
     name = re.sub(r"\s*<[^>]+>\s*$", "", name).strip()
+    name = re.split(
+        r"\s+[-–—]\s*(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}-\d{2}-\d{2})\b",
+        name,
+        maxsplit=1,
+    )[0]
     name = re.sub(
         r"^(?:nome(?:\s+completo)?|colaborador(?:a)?|funcion[aá]ri[oa]|employee|pessoa|destinat[aá]rio)\s*[:\-]\s*",
         "",

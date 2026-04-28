@@ -143,12 +143,12 @@ A opcao mais simples para custo zero e o **GitHub Actions**:
 - nao exige servidor ligado o tempo todo
 - aceita segredos do repositorio
 - o workflow deste projeto ja foi criado em `.github/workflows/daily_scan.yml`
-- para pedidos por mencao ao bot em canal dedicado, existe tambem `.github/workflows/mention_requests.yml`
+- para scan frequente do Discord, existe tambem `.github/workflows/mention_requests.yml`, que processa os canais estruturados e os pedidos por mencao
 
 Limites importantes do GitHub Actions:
 
 - o cron usa UTC, entao o scan diario esta em `17 12 * * *`, equivalente a **09:17 em `America/Sao_Paulo`**
-- o workflow de mencoes roda em `2-59/5 * * * *`, isto e, aproximadamente a cada 5 minutos
+- o workflow frequente do Discord roda em `2-59/5 * * * *`, isto e, aproximadamente a cada 5 minutos
 - execucoes agendadas podem atrasar ou ate ser descartadas em periodos de alta carga no GitHub Actions
 - por isso, GitHub Actions e fallback/paliativo, nao "escuta sempre"
 

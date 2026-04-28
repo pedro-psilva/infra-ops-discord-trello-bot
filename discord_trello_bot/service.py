@@ -22,6 +22,7 @@ LOGGER = logging.getLogger(__name__)
 
 SUPPORTED_MESSAGE_TYPES = {0, 19}
 URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>\"]+", re.IGNORECASE)
+PAST_TASK_GRACE_DAYS = 3
 
 
 class DiscordTrelloService:
@@ -141,9 +142,9 @@ class DiscordTrelloService:
             card_urls: list[str] = []
             created_count = 0
             for task in parse_result.tasks:
-                if self._is_past_task(task):
+                if self._is_stale_task(task):
                     LOGGER.info(
-                        "Tarefa da mensagem %s ignorada por estar no passado: %s %s.",
+                        "Tarefa da mensagem %s ignorada por estar alem da tolerancia de passado: %s %s.",
                         message.id,
                         task.employee_name,
                         task.effective_date.isoformat(),
@@ -390,9 +391,9 @@ class DiscordTrelloService:
             processed_count = 0
             created_count = 0
             for task in parse_result.tasks:
-                if self._is_past_task(task):
+                if self._is_stale_task(task):
                     LOGGER.info(
-                        "Tarefa do e-mail %s ignorada por estar no passado: %s %s.",
+                        "Tarefa do e-mail %s ignorada por estar alem da tolerancia de passado: %s %s.",
                         email_message.id,
                         task.employee_name,
                         task.effective_date.isoformat(),
@@ -442,9 +443,10 @@ class DiscordTrelloService:
         )
         return card, True
 
-    def _is_past_task(self, task: ParsedTask) -> bool:
+    def _is_stale_task(self, task: ParsedTask) -> bool:
         today = datetime.now(tz=self.settings.timezone).date()
-        return task.effective_date < today
+        oldest_allowed_date = today - timedelta(days=PAST_TASK_GRACE_DAYS)
+        return task.effective_date < oldest_allowed_date
 
     def _build_email_task_message(self, email_message: EmailMessage) -> DiscordMessage:
         content = "\n".join(
