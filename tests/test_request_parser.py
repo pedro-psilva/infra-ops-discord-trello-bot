@@ -351,6 +351,67 @@ class RequestParserTests(unittest.TestCase):
         self.assertIn("Foi considerado usar termo do notebook em vez de contrato.", requested_card.context_excerpt)
         self.assertNotIn("Franciele Garcia", requested_card.context_excerpt)
 
+    def test_parse_request_uses_specific_command_title_when_present(self) -> None:
+        command_message = build_message(
+            message_id="cmd-6",
+            content="<@bot-1> crie um card para o envio da notificacao extrajudicial via correios com AR com base nesta conversa",
+            hour=11,
+            minute=9,
+            referenced_message_id=None,
+        )
+        recent_messages = [
+            build_message(
+                message_id="ctx-50",
+                content="Pessoal, sobre o Ivan, ele parou de responder e nao recebeu o distrato ainda.",
+                hour=10,
+                minute=14,
+                author_id="author-2",
+                author_name="Bianca Oliveira",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-51",
+                content="E se mandar uma notificacao extrajudicial via correio?",
+                hour=10,
+                minute=14,
+                author_id="author-2",
+                author_name="Bianca Oliveira",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-52",
+                content="Mas da pra mandar, porem precisaria de AR.",
+                hour=10,
+                minute=17,
+                author_name="Pedro Paulo",
+                mentioned_user_ids=(),
+            ),
+            build_message(
+                message_id="ctx-53",
+                content="Pedro, valida com o Ricardo se podemos enviar via correio; dependendo vale mandar um motoboy buscar.",
+                hour=10,
+                minute=20,
+                author_id="author-3",
+                author_name="Franciele Garcia",
+                mentioned_user_ids=(),
+            ),
+        ]
+
+        requested_card, selected_context_messages, reason = self.parser.parse(
+            command_message=command_message,
+            bot_user_id="bot-1",
+            recent_channel_messages=recent_messages,
+            reply_chain_messages=[],
+        )
+
+        self.assertIsNone(reason)
+        assert requested_card is not None
+        self.assertEqual(
+            requested_card.title,
+            "Envio da notificacao extrajudicial via correios com AR",
+        )
+        self.assertEqual([message.id for message in selected_context_messages], ["ctx-50", "ctx-51", "ctx-52", "ctx-53"])
+
     def test_skip_when_mention_is_not_a_card_request(self) -> None:
         command_message = build_message(
             message_id="cmd-3",

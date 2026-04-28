@@ -3,8 +3,7 @@ name: Discord Mention Requests
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/15 * * * *"
-      timezone: "America/Sao_Paulo"
+    - cron: "2-59/5 * * * *"
 
 jobs:
   run-bot:

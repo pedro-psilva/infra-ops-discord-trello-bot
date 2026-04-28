@@ -3,8 +3,7 @@ name: Daily Discord to Trello
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 9 * * *"
-      timezone: "America/Sao_Paulo"
+    - cron: "17 12 * * *"
 
 jobs:
   run-bot:

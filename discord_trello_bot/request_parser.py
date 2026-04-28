@@ -256,6 +256,14 @@ def _build_card_title(
         candidate,
         flags=re.IGNORECASE,
     )
+    candidate = re.sub(
+        r"\b(?:com\s+base\s+(?:nesta|nessa|na)\s+conversa|com\s+base\s+nisso|baseado\s+nisso)\b",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    candidate = re.sub(r"^\s*(?:pra|para)\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^\s*(?:o|a|os|as)\s+", "", candidate, flags=re.IGNORECASE)
     candidate = re.sub(r"\bfeira\b", "", candidate, flags=re.IGNORECASE)
     candidate = candidate.strip(" ,:-")
     if any(pattern.match(candidate) for pattern in GENERIC_TITLE_PATTERNS):
@@ -635,20 +643,33 @@ def _title_from_summary(summary: str) -> str:
 
 def _normalize_title(text: str) -> str:
     normalized = re.sub(r"\s+", " ", text).strip(" ,:-")
+    if normalized:
+        normalized = normalized[0].upper() + normalized[1:]
     return normalized
 
 
 def _is_generic_request_candidate(candidate: str) -> bool:
-    normalized = _strip_accents(candidate.lower())
-    generic_fragments = (
+    normalized = _strip_accents(candidate.lower()).strip(" ,:-.")
+    generic_exact = {
         "sobre isso",
         "sobre essa mensagem",
         "sobre esta mensagem",
+        "sobre essa conversa",
+        "sobre esta conversa",
         "disso",
-        "pra ",
-        "para ",
-    )
-    return any(fragment in normalized for fragment in generic_fragments)
+        "isso",
+        "essa mensagem",
+        "esta mensagem",
+        "essa conversa",
+        "esta conversa",
+    }
+    if normalized in generic_exact:
+        return True
+
+    return re.fullmatch(
+        r"(?:pra|para|ate)?\s*(?:hoje|amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo)(?:\s+feira)?",
+        normalized,
+    ) is not None
 
 
 def _looks_actionable_sentence(text: str) -> bool:

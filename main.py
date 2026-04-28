@@ -19,6 +19,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help="Sobrescreve o LOOKBACK_DAYS apenas para esta execucao.",
     )
+    parser.add_argument(
+        "--listen",
+        action="store_true",
+        help="Mantem o bot conectado ao Gateway do Discord para processar mensagens em tempo real.",
+    )
     return parser
 
 
@@ -34,6 +39,12 @@ def main() -> int:
     args = build_argument_parser().parse_args()
     settings = load_settings(lookback_days_override=args.lookback_days)
     configure_logging(settings)
+
+    if args.listen:
+        from discord_trello_bot.live_bot import run_live_bot
+
+        run_live_bot(settings)
+        return 0
 
     service = DiscordTrelloService(settings)
     summary = service.run()

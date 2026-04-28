@@ -4,11 +4,11 @@ Bot em Python para ler mensagens de um ou mais canais do Discord, identificar ta
 
 ## Arquitetura escolhida
 
-Para ficar o mais perto possivel de custo zero, o projeto foi estruturado para rodar como um job agendado, sem manter uma conexao 24/7 com o Gateway do Discord. A execucao diaria pode ficar no GitHub Actions, que segundo a documentacao oficial aceita agendamento com `schedule`, suporta timezone IANA e roda no ultimo commit da branch padrao.
+Para ficar o mais perto possivel de custo zero, o projeto suporta dois modos. O modo agendado roda no GitHub Actions e e bom para scans periodicos, mas nao e tempo real. O modo listener (`python main.py --listen`) mantem conexao com o Gateway do Discord e processa mencoes assim que o Discord envia o evento, desde que esteja hospedado em um worker/VM sempre ligado.
 
 ## Como funciona
 
-1. O workflow ou a execucao local chama `python main.py`.
+1. O workflow ou a execucao local chama `python main.py`; em tempo real, um worker chama `python main.py --listen`.
 2. O script lista as mensagens recentes dos canais configurados.
 3. O parser procura tipo da tarefa, nome do colaborador e data.
 4. Quando os tres campos sao encontrados com seguranca, o bot:
@@ -129,9 +129,15 @@ Para uma verificacao manual com janela diferente:
 python main.py --lookback-days 14
 ```
 
+Para deixar o bot escutando mencoes em tempo real:
+
+```powershell
+python main.py --listen
+```
+
 ## Hospedagem quase gratuita
 
-A opcao mais simples para este caso e o **GitHub Actions**:
+A opcao mais simples para custo zero e o **GitHub Actions**:
 
 - serve bem para execucao diaria
 - nao exige servidor ligado o tempo todo
@@ -139,7 +145,19 @@ A opcao mais simples para este caso e o **GitHub Actions**:
 - o workflow deste projeto ja foi criado em `.github/workflows/daily_scan.yml`
 - para pedidos por mencao ao bot em canal dedicado, existe tambem `.github/workflows/mention_requests.yml`
 
-Assumi como horario padrao **09:17 em `America/Sao_Paulo`** para o scan diario. Para pedidos por mencao ao bot, o workflow dedicado roda **a cada 15 minutos**. Se voce quiser outro horario ou outra cadencia, basta ajustar o cron dos workflows.
+Limites importantes do GitHub Actions:
+
+- o cron usa UTC, entao o scan diario esta em `17 12 * * *`, equivalente a **09:17 em `America/Sao_Paulo`**
+- o workflow de mencoes roda em `2-59/5 * * * *`, isto e, aproximadamente a cada 5 minutos
+- execucoes agendadas podem atrasar ou ate ser descartadas em periodos de alta carga no GitHub Actions
+- por isso, GitHub Actions e fallback/paliativo, nao "escuta sempre"
+
+Para resposta rapida, use o modo listener:
+
+- comando: `python main.py --listen`
+- start command em hospedagem: `python main.py --listen`
+- `Procfile` incluido: `worker: python main.py --listen`
+- precisa de um ambiente que mantenha processo ligado; se o host dormir, o bot tambem para de escutar
 
 ## Segredos do GitHub Actions
 
@@ -231,6 +249,7 @@ Se as mensagens reais tiverem outro formato, me passe 2 ou 3 exemplos reais e eu
 - Discord Bots / setup do app: https://docs.discord.com/developers/bots
 - Discord installation / getting started: https://docs.discord.com/developers/quick-start/getting-started
 - Discord Gateway intents: https://docs.discord.com/developers/events/gateway
+- discord.py quickstart: https://discordpy.readthedocs.io/en/stable/quickstart.html
 - Discord Message resource: https://docs.discord.com/developers/resources/message
 - Trello API intro: https://developer.atlassian.com/cloud/trello/guides/rest-api/api-introduction/
 - Trello Cards REST API: https://developer.atlassian.com/cloud/trello/rest/api-group-cards/
