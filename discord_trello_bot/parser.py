@@ -35,8 +35,15 @@ OFFBOARDING_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
 
 LABEL_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        r"\b(?:nome(?:\s+completo)?|colaborador(?:a)?|funcion[aá]ri[oa]|employee|pessoa)\s*[:\-]\s*(?P<name>[^\n;|]+)",
+        r"\b(?:nome(?:\s+completo)?|colaborador(?:a)?|funcion[aá]ri[oa]|employee|pessoa|destinat[aá]rio)\s*[:\-]\s*(?P<name>[^\n;|]+)",
         re.IGNORECASE,
+    ),
+)
+
+GREETING_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        rf"^\s*(?:bom\s+dia|boa\s+tarde|boa\s+noite),\s*(?P<name>{NAME_WORD}(?:\s+{NAME_WORD}){{0,3}})\s*(?:[!,]|$)",
+        re.IGNORECASE | re.MULTILINE,
     ),
 )
 
@@ -113,6 +120,8 @@ NOTE_KEYWORDS: tuple[str, ...] = (
     "devolver",
     "devolucao",
     "devolução",
+    "ultimo dia",
+    "último dia",
     "uber",
     "coleta",
     "entrega",
@@ -264,7 +273,8 @@ def _looks_like_date_fragment(fragment: str) -> bool:
         return True
     month_keywords = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
     lowered = fragment.lower()
-    return any(keyword in lowered for keyword in month_keywords)
+    relative_keywords = ("hoje", "amanha", "amanhã")
+    return any(keyword in lowered for keyword in month_keywords + relative_keywords)
 
 
 def _extract_employee_names(text: str, task_type: TaskType) -> tuple[str, ...]:
@@ -276,6 +286,13 @@ def _extract_employee_names(text: str, task_type: TaskType) -> tuple[str, ...]:
             candidate = _clean_name(match.group("name"))
             if candidate:
                 return (candidate,)
+
+    if task_type is TaskType.OFFBOARDING:
+        for pattern in GREETING_NAME_PATTERNS:
+            for match in pattern.finditer(text):
+                candidate = _clean_greeting_name(match.group("name"))
+                if candidate:
+                    return (candidate,)
 
     list_candidates = _extract_list_names(text)
     if list_candidates:
@@ -356,8 +373,9 @@ def _looks_like_name(candidate: str) -> bool:
 def _clean_name(raw: str) -> str | None:
     name = raw.strip(" .,-:;|/\t")
     name = name.strip("*_`")
+    name = re.sub(r"\s*<[^>]+>\s*$", "", name).strip()
     name = re.sub(
-        r"^(?:nome(?:\s+completo)?|colaborador(?:a)?|funcion[aá]ri[oa]|employee|pessoa)\s*[:\-]\s*",
+        r"^(?:nome(?:\s+completo)?|colaborador(?:a)?|funcion[aá]ri[oa]|employee|pessoa|destinat[aá]rio)\s*[:\-]\s*",
         "",
         name,
         flags=re.IGNORECASE,
@@ -381,6 +399,27 @@ def _clean_name(raw: str) -> str | None:
         return None
     if not _looks_like_name(name):
         return None
+
+    return name
+
+
+def _clean_greeting_name(raw: str) -> str | None:
+    name = raw.strip(" .,!?:;|/\t")
+    name = re.sub(r"\s{2,}", " ", name)
+    if not name or any(char.isdigit() for char in name):
+        return None
+
+    words = name.split()
+    if len(words) > 4:
+        return None
+    for word in words:
+        lowered = word.lower()
+        if lowered in NAME_CONNECTORS:
+            continue
+        if lowered in NAME_STOPWORDS:
+            return None
+        if not word[0].isalpha() or not word[0].isupper():
+            return None
 
     return name
 

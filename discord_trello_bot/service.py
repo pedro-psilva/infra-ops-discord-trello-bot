@@ -449,7 +449,11 @@ class DiscordTrelloService:
     def _build_email_task_message(self, email_message: EmailMessage) -> DiscordMessage:
         content = "\n".join(
             part
-            for part in (email_message.subject, email_message.body)
+            for part in (
+                email_message.subject,
+                _build_email_recipient_line(email_message.recipient),
+                email_message.body,
+            )
             if part.strip()
         )
         return DiscordMessage(
@@ -525,6 +529,7 @@ class DiscordTrelloService:
             "Origem no e-mail:",
             f"- Conta: {self.settings.gmail_user_email}",
             f"- Remetente: {email_message.sender or 'Nao identificado'}",
+            f"- Destinatario: {email_message.recipient or 'Nao identificado'}",
             f"- Assunto: {email_message.subject or 'Sem assunto'}",
             f"- Enviado em: {local_timestamp}",
             f"- Gmail message ID: {email_message.id}",
@@ -763,6 +768,27 @@ def _extract_urls_from_messages(messages: list[DiscordMessage]) -> list[str]:
             seen.add(normalized)
             urls.append(url)
     return urls
+
+
+def _build_email_recipient_line(recipient: str) -> str:
+    recipient_name = _extract_email_display_name(recipient)
+    if not recipient_name:
+        return ""
+    return f"Destinatario: {recipient_name}"
+
+
+def _extract_email_display_name(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"\s*<[^>]+>\s*$", "", cleaned).strip().strip('"')
+    if "@" in cleaned:
+        local_part = cleaned.split("@", 1)[0]
+        pieces = [piece for piece in re.split(r"[._+-]+", local_part) if piece]
+        if len(pieces) < 2:
+            return ""
+        cleaned = " ".join(piece.capitalize() for piece in pieces)
+    return cleaned
 
 
 def _compact_comment_text(text: str) -> str:

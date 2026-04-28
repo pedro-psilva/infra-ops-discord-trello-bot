@@ -107,7 +107,7 @@ Copie `.env.example` para `.env` quando for rodar localmente.
 | `GMAIL_CLIENT_ID` | Nao | OAuth Client ID do Google Cloud |
 | `GMAIL_CLIENT_SECRET` | Nao | OAuth Client Secret do Google Cloud |
 | `GMAIL_REFRESH_TOKEN` | Nao | Refresh token OAuth com escopo Gmail modify |
-| `GMAIL_QUERY` | Nao | Busca usada para e-mails de onboarding |
+| `GMAIL_QUERY` | Nao | Busca usada para e-mails de onboarding/offboarding |
 | `GMAIL_PROCESSED_LABEL_NAME` | Nao | Label aplicada depois do processamento |
 | `GMAIL_MAX_RESULTS` | Nao | Maximo de e-mails lidos por execucao |
 | `BOT_TIMEZONE` | Nao | Timezone IANA, padrao `America/Sao_Paulo` |
@@ -212,7 +212,9 @@ O fluxo estruturado diario de onboarding/offboarding continua sem OpenAI.
 
 ## Gmail no fluxo diario
 
-Quando `GMAIL_USER_EMAIL`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` e `GMAIL_REFRESH_TOKEN` estiverem configurados, o workflow diario tambem busca e-mails pelo `GMAIL_QUERY`. Ao criar ou encontrar os cards, o bot adiciona no comentario informacoes adicionais encontradas no e-mail, como endereco, CEP, telefone, cargo, area, gestor, modalidade, notebook e perifericos.
+Quando `GMAIL_USER_EMAIL`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` e `GMAIL_REFRESH_TOKEN` estiverem configurados, o workflow diario tambem busca e-mails pelo `GMAIL_QUERY`. A busca padrao inclui onboarding e offboarding, inclusive assuntos como `[Infra] Orientacoes ao processo de Offboarding`. Ao criar ou encontrar os cards, o bot adiciona no comentario informacoes adicionais encontradas no e-mail, como endereco, CEP, telefone, cargo, area, gestor, modalidade, notebook, perifericos, ultimo dia e devolucao.
+
+Para offboarding recebido por e-mail, o bot tambem reconhece mensagens em que o assunto indica offboarding e o corpo informa algo como `seu ultimo dia trabalhado sera hoje`. Nesse caso, a data do card e calculada a partir da data do proprio e-mail. O nome pode vir de campos estruturados, do destinatario do e-mail ou da saudacao inicial, por exemplo `Boa tarde, Jucilene!`.
 
 O e-mail e o Discord usam a mesma chave de deduplicacao: tipo da tarefa, nome do colaborador e data. Quem chegar primeiro cria o card; quem chegar depois comenta no card existente.
 

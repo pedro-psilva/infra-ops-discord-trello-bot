@@ -118,6 +118,7 @@ class EmailMessage:
     body: str
     timestamp: datetime
     label_ids: tuple[str, ...]
+    recipient: str = ""
 
 
 @dataclass(frozen=True)

@@ -45,7 +45,7 @@ class Settings:
     gmail_client_id: str | None = None
     gmail_client_secret: str | None = None
     gmail_refresh_token: str | None = None
-    gmail_query: str = "newer_than:7d (onboarding OR admissao OR admissão OR contratação)"
+    gmail_query: str = "newer_than:7d (onboarding OR offboarding OR admissao OR admissão OR contratação OR desligamento OR subject:Offboarding)"
     gmail_processed_label_name: str = "Infra Ops Processado"
     gmail_max_results: int = 10
 
@@ -193,9 +193,9 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         gmail_refresh_token=gmail_refresh_token,
         gmail_query=os.getenv(
             "GMAIL_QUERY",
-            "newer_than:7d (onboarding OR admissao OR admissão OR contratação)",
+            "newer_than:7d (onboarding OR offboarding OR admissao OR admissão OR contratação OR desligamento OR subject:Offboarding)",
         ).strip()
-        or "newer_than:7d (onboarding OR admissao OR admissão OR contratação)",
+        or "newer_than:7d (onboarding OR offboarding OR admissao OR admissão OR contratação OR desligamento OR subject:Offboarding)",
         gmail_processed_label_name=os.getenv(
             "GMAIL_PROCESSED_LABEL_NAME",
             "Infra Ops Processado",

@@ -56,6 +56,7 @@ class GmailApiClient:
             body=body,
             timestamp=timestamp,
             label_ids=tuple(str(label_id) for label_id in payload.get("labelIds", [])),
+            recipient=headers.get("to", ""),
         )
 
     def processed_label_id(self) -> str:

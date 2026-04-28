@@ -109,6 +109,21 @@ class TaskParserTests(unittest.TestCase):
         self.assertEqual(result.task.employee_name, "Joao Souza")
         self.assertEqual(result.task.effective_date.isoformat(), "2026-04-30")
 
+    def test_parse_offboarding_email_with_today_and_greeting_name(self) -> None:
+        message = build_message(
+            "[Infra] Orientacoes ao processo de Offboarding\n"
+            "Boa tarde, Jucilene! Como voce esta?\n\n"
+            "Venho trazer mais informacoes sobre os proximos passos no processo de desligamento, "
+            "visto que seu ultimo dia trabalhado sera hoje."
+        )
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.task_type, TaskType.OFFBOARDING)
+        self.assertEqual(result.task.employee_name, "Jucilene")
+        self.assertEqual(result.task.effective_date.isoformat(), "2026-04-17")
+
     def test_parse_multiple_names_from_bullet_list(self) -> None:
         message = build_message(
             "Proximos Onboardings (04/05)\n\n- Maria Eduarda de Castro das Neves Silva\n- Ana Julia Simoes Silverio"

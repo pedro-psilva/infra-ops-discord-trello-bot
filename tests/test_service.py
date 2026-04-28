@@ -361,6 +361,47 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertIn("Endereco: Rua das Flores", comment)
         self.assertIn("Cargo: Analista de Operacoes", comment)
 
+    def test_create_offboarding_card_from_email_with_today_and_recipient_name(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.gmail = Mock()
+        service.trello.find_open_card_by_name.return_value = None
+        service.trello.create_card_from_template.return_value = {
+            "id": "card-offboarding",
+            "url": "https://trello/card-offboarding",
+        }
+        email_message = EmailMessage(
+            id="email-offboarding-1",
+            thread_id="thread-offboarding-1",
+            sender="rh@example.com",
+            recipient="Jucilene Silva <jucilene.silva@example.com>",
+            subject="[Infra] Orientacoes ao processo de Offboarding",
+            body=(
+                "Boa tarde, Jucilene! Como voce esta? Espero que se encontre bem!\n\n"
+                "Venho trazer mais informacoes sobre os proximos passos no processo de desligamento, "
+                "visto que seu ultimo dia trabalhado sera hoje."
+            ),
+            timestamp=datetime(2026, 5, 5, 15, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=(),
+        )
+
+        outcome, created_count = service._process_email_message(email_message)
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 1)
+        service.trello.create_card_from_template.assert_called_once()
+        create_kwargs = service.trello.create_card_from_template.call_args.kwargs
+        self.assertEqual(create_kwargs["task_type"], TaskType.OFFBOARDING)
+        self.assertEqual(create_kwargs["card_name"], "[Offboarding] Jucilene Silva - 05/05/2026")
+        service.trello.add_comment.assert_called_once()
+        comment = service.trello.add_comment.call_args.kwargs["text"]
+        self.assertIn("Origem no e-mail:", comment)
+        self.assertIn("Destinatario: Jucilene Silva <jucilene.silva@example.com>", comment)
+        self.assertIn("Tipo: Offboarding", comment)
+        self.assertIn("Data: 05/05/2026", comment)
+        self.assertIn("ultimo dia trabalhado sera hoje", comment)
+        service.gmail.mark_processed.assert_called_once_with("email-offboarding-1")
+
     def test_discord_complement_comments_future_onboarding_card(self) -> None:
         service = DiscordTrelloService(build_settings())
         service.trello = Mock()
