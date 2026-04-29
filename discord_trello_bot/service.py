@@ -23,6 +23,7 @@ LOGGER = logging.getLogger(__name__)
 SUPPORTED_MESSAGE_TYPES = {0, 19}
 URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>\"]+", re.IGNORECASE)
 PAST_TASK_GRACE_DAYS = 3
+ONBOARDING_EMAIL_DETAILS_HEADING = "## Informacoes de onboarding recebidas por e-mail"
 
 
 class DiscordTrelloService:
@@ -165,7 +166,7 @@ class DiscordTrelloService:
                 card_urls.append(card_url)
                 self.trello.add_comment(
                     card_id=card_id,
-                    text=self._build_trello_comment(task=task, message=message, card_url=card_url),
+                    text=self._build_trello_comment(task=task, message=message),
                 )
 
             if not card_urls:
@@ -368,6 +369,17 @@ class DiscordTrelloService:
         for email_message in messages:
             summary.emails_scanned += 1
             if processed_label_id in email_message.label_ids:
+                if self.settings.gmail_backfill_onboarding_descriptions:
+                    updated_count = self._backfill_onboarding_description_from_email(email_message)
+                    if updated_count:
+                        LOGGER.info(
+                            "E-mail %s usado para atualizar descricao de %s card(s) de onboarding.",
+                            email_message.id,
+                            updated_count,
+                        )
+                    else:
+                        LOGGER.info("E-mail %s ja processado, sem backfill aplicavel.", email_message.id)
+                    continue
                 LOGGER.info("E-mail %s ja possui label de processado.", email_message.id)
                 continue
 
@@ -414,8 +426,12 @@ class DiscordTrelloService:
                     text=self._build_email_trello_comment(
                         task=task,
                         email_message=email_message,
-                        card_url=str(card["url"]),
                     ),
+                )
+                self._sync_email_details_to_card_description(
+                    card_id=str(card["id"]),
+                    task=task,
+                    email_message=email_message,
                 )
                 processed_count += 1
 
@@ -429,12 +445,51 @@ class DiscordTrelloService:
             LOGGER.exception("Falha ao processar e-mail %s.", email_message.id)
             return "error", 0
 
+    def _backfill_onboarding_description_from_email(self, email_message: EmailMessage) -> int:
+        synthetic_message = self._build_email_task_message(email_message)
+        parse_result = self.parser.parse_message(synthetic_message)
+        if not parse_result.tasks:
+            return 0
+
+        updated_count = 0
+        for task in parse_result.tasks:
+            if task.task_type is not TaskType.ONBOARDING or not task.notes:
+                continue
+            existing_card = self._find_existing_task_card(task)
+            if existing_card is None:
+                LOGGER.info(
+                    "Backfill ignorado para e-mail %s: card existente nao encontrado para %s %s.",
+                    email_message.id,
+                    task.employee_name,
+                    task.effective_date.isoformat(),
+                )
+                continue
+            self._sync_email_details_to_card_description(
+                card_id=str(existing_card["id"]),
+                task=task,
+                email_message=email_message,
+            )
+            updated_count += 1
+        return updated_count
+
     def _get_or_create_task_card(self, task: ParsedTask) -> tuple[dict, bool]:
+        existing_card = self._find_existing_task_card(task)
+        if existing_card is not None:
+            return existing_card, False
+
+        card = self.trello.create_card_from_template(
+            card_name=self._build_card_name(task),
+            due_iso=self._build_due_iso(task.effective_date),
+            task_type=task.task_type,
+        )
+        return card, True
+
+    def _find_existing_task_card(self, task: ParsedTask) -> dict | None:
         card_name = self._build_card_name(task)
         existing_card = self.trello.find_open_card_by_name(card_name)
         if existing_card is not None:
             LOGGER.info("Card existente encontrado no Trello: %s.", card_name)
-            return existing_card, False
+            return existing_card
 
         compatible_card = self._find_compatible_task_card(task)
         if compatible_card is not None:
@@ -447,14 +502,8 @@ class DiscordTrelloService:
                 "id": compatible_card.id,
                 "url": compatible_card.url,
                 "name": compatible_card.name,
-            }, False
-
-        card = self.trello.create_card_from_template(
-            card_name=card_name,
-            due_iso=self._build_due_iso(task.effective_date),
-            task_type=task.task_type,
-        )
-        return card, True
+            }
+        return None
 
     def _find_compatible_task_card(self, task: ParsedTask) -> TaskCard | None:
         same_date_cards = [
@@ -524,7 +573,7 @@ class DiscordTrelloService:
         due_utc = local_noon.astimezone(UTC).replace(microsecond=0)
         return due_utc.isoformat().replace("+00:00", "Z")
 
-    def _build_trello_comment(self, *, task: ParsedTask, message: DiscordMessage, card_url: str) -> str:
+    def _build_trello_comment(self, *, task: ParsedTask, message: DiscordMessage) -> str:
         local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
         message_url = build_discord_message_url(
             guild_id=self.settings.discord_guild_id,
@@ -542,15 +591,12 @@ class DiscordTrelloService:
             f"- Data: {task.effective_date.strftime('%d/%m/%Y')}",
             f"- Autor da mensagem: {message.author_name}",
             f"- Enviado em: {local_timestamp}",
-            "",
-            f"Card criado: {card_url}",
         ]
 
         if task.notes:
             lines.extend(["", "Observacoes detectadas:"])
             lines.extend(f"- {note}" for note in task.notes)
 
-        lines.extend(["", "Mensagem original:", task.raw_excerpt])
         return "\n".join(lines)
 
     def _build_email_trello_comment(
@@ -558,7 +604,6 @@ class DiscordTrelloService:
         *,
         task: ParsedTask,
         email_message: EmailMessage,
-        card_url: str,
     ) -> str:
         local_timestamp = email_message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
         lines = [
@@ -574,16 +619,35 @@ class DiscordTrelloService:
             f"- Tipo: {task.task_type.label_pt_br}",
             f"- Colaborador: {task.employee_name}",
             f"- Data: {task.effective_date.strftime('%d/%m/%Y')}",
-            "",
-            f"Card criado: {card_url}",
         ]
 
-        if task.notes:
+        if task.task_type is TaskType.ONBOARDING and task.notes:
+            lines.extend(["", "Informacoes adicionais adicionadas na descricao do card."])
+        elif task.notes:
             lines.extend(["", "Informacoes adicionais detectadas:"])
             lines.extend(f"- {note}" for note in task.notes)
-
-        lines.extend(["", "Conteudo original:", task.raw_excerpt])
         return "\n".join(lines)
+
+    def _sync_email_details_to_card_description(
+        self,
+        *,
+        card_id: str,
+        task: ParsedTask,
+        email_message: EmailMessage,
+    ) -> None:
+        if task.task_type is not TaskType.ONBOARDING or not task.notes:
+            return
+
+        card = self.trello.get_card(card_id, fields="id,desc")
+        current_desc = str(card.get("desc") or "")
+        updated_desc = _upsert_onboarding_email_details_section(
+            current_desc=current_desc,
+            task=task,
+            email_message=email_message,
+            timezone=self.settings.timezone,
+        )
+        if updated_desc != current_desc:
+            self.trello.update_card_description(card_id=card_id, desc=updated_desc)
 
     def _build_complement_trello_comment(
         self,
@@ -882,3 +946,50 @@ def _single_first_name_match(left: str, right: str) -> bool:
     if not left_tokens or not right_tokens:
         return False
     return len(left_tokens) == 1 and left_tokens[0] == right_tokens[0]
+
+
+def _upsert_onboarding_email_details_section(
+    *,
+    current_desc: str,
+    task: ParsedTask,
+    email_message: EmailMessage,
+    timezone,
+) -> str:
+    notes = _unique_compact_lines(task.notes)
+    if not notes:
+        return current_desc
+
+    local_timestamp = email_message.timestamp.astimezone(timezone).strftime("%d/%m/%Y %H:%M")
+    section_lines = [
+        ONBOARDING_EMAIL_DETAILS_HEADING,
+        f"- Colaborador: {task.employee_name}",
+        f"- Data de entrada: {task.effective_date.strftime('%d/%m/%Y')}",
+        f"- Recebido por e-mail em: {local_timestamp}",
+        "",
+        "**Dados recebidos:**",
+    ]
+    section_lines.extend(f"- {note}" for note in notes)
+    section = "\n".join(section_lines)
+
+    pattern = re.compile(
+        rf"(?:\n{{2,}})?{re.escape(ONBOARDING_EMAIL_DETAILS_HEADING)}\n.*?(?=\n{{2,}}## |\Z)",
+        re.DOTALL,
+    )
+    if pattern.search(current_desc):
+        return pattern.sub(f"\n\n{section}", current_desc).strip()
+    if current_desc.strip():
+        return f"{current_desc.rstrip()}\n\n{section}"
+    return section
+
+
+def _unique_compact_lines(values: tuple[str, ...]) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        compact = _compact_comment_text(value)
+        key = _normalize_lookup(compact)
+        if not compact or key in seen:
+            continue
+        seen.add(key)
+        lines.append(compact)
+    return lines

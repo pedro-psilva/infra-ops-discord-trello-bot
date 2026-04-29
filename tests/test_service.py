@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
@@ -298,6 +299,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
             "id": "card-1",
             "url": "https://trello/card-1",
         }
+        service.trello.get_card.return_value = {"id": "card-1", "desc": "Checklist padrao do template"}
         email_message = EmailMessage(
             id="email-1",
             thread_id="thread-1",
@@ -322,9 +324,15 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.trello.add_comment.assert_called_once()
         comment = service.trello.add_comment.call_args.kwargs["text"]
         self.assertIn("Origem no e-mail:", comment)
-        self.assertIn("Informacoes adicionais detectadas:", comment)
-        self.assertIn("Endereco: Rua das Flores", comment)
-        self.assertIn("CEP: 01000-000", comment)
+        self.assertIn("Informacoes adicionais adicionadas na descricao do card.", comment)
+        self.assertNotIn("Card criado:", comment)
+        self.assertNotIn("Conteudo original:", comment)
+        service.trello.update_card_description.assert_called_once()
+        desc = service.trello.update_card_description.call_args.kwargs["desc"]
+        self.assertIn("## Informacoes de onboarding recebidas por e-mail", desc)
+        self.assertIn("Endereco: Rua das Flores", desc)
+        self.assertIn("CEP: 01000-000", desc)
+        self.assertIn("Checklist padrao do template", desc)
         service.gmail.mark_processed.assert_called_once_with("email-1")
 
     def test_email_adds_comment_to_existing_onboarding_card_instead_of_creating_duplicate(self) -> None:
@@ -336,6 +344,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
             "url": "https://trello/existing-card",
             "name": "[Onboarding] Ana Paula Souza - 05/05/2026",
         }
+        service.trello.get_card.return_value = {"id": "existing-card", "desc": ""}
         email_message = EmailMessage(
             id="email-2",
             thread_id="thread-2",
@@ -359,8 +368,12 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.trello.add_comment.assert_called_once()
         self.assertEqual(service.trello.add_comment.call_args.kwargs["card_id"], "existing-card")
         comment = service.trello.add_comment.call_args.kwargs["text"]
-        self.assertIn("Endereco: Rua das Flores", comment)
-        self.assertIn("Cargo: Analista de Operacoes", comment)
+        self.assertIn("Informacoes adicionais adicionadas na descricao do card.", comment)
+        self.assertNotIn("Card criado:", comment)
+        service.trello.update_card_description.assert_called_once()
+        desc = service.trello.update_card_description.call_args.kwargs["desc"]
+        self.assertIn("Endereco: Rua das Flores", desc)
+        self.assertIn("Cargo: Analista de Operacoes", desc)
 
     def test_email_matches_existing_card_with_compatible_name_same_date(self) -> None:
         service = DiscordTrelloService(build_settings())
@@ -377,6 +390,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
                 effective_date=datetime(2026, 5, 4).date(),
             )
         ]
+        service.trello.get_card.return_value = {"id": "existing-card", "desc": ""}
         email_message = EmailMessage(
             id="email-compatible-name",
             thread_id="thread-compatible-name",
@@ -396,6 +410,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertEqual(created_count, 0)
         service.trello.create_card_from_template.assert_not_called()
         self.assertEqual(service.trello.add_comment.call_args.kwargs["card_id"], "existing-card")
+        service.trello.update_card_description.assert_called_once()
 
     def test_past_onboarding_is_stale_without_grace_period(self) -> None:
         service = DiscordTrelloService(build_settings())
@@ -409,6 +424,42 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         )
 
         self.assertTrue(service._is_stale_task(task))
+
+    def test_backfill_processed_email_updates_onboarding_description_only(self) -> None:
+        service = DiscordTrelloService(
+            replace(build_settings(), gmail_backfill_onboarding_descriptions=True)
+        )
+        service.trello = Mock()
+        service.trello.find_open_card_by_name.return_value = {
+            "id": "existing-card",
+            "url": "https://trello/existing-card",
+            "name": "[Onboarding] Ana Paula Souza - 05/05/2026",
+        }
+        service.trello.get_card.return_value = {"id": "existing-card", "desc": ""}
+        email_message = EmailMessage(
+            id="email-backfill",
+            thread_id="thread-backfill",
+            sender="rh@example.com",
+            subject="Onboarding Ana Paula Souza",
+            body=(
+                "Nome Completo: Ana Paula Souza\n"
+                "Data de Admissao: 05/05/2026\n"
+                "Endereco: Rua das Flores, 123 - Centro - Sao Paulo/SP\n"
+                "CEP: 01000-000"
+            ),
+            timestamp=datetime(2026, 4, 24, 10, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=("processed",),
+        )
+
+        updated_count = service._backfill_onboarding_description_from_email(email_message)
+
+        self.assertEqual(updated_count, 1)
+        service.trello.create_card_from_template.assert_not_called()
+        service.trello.add_comment.assert_not_called()
+        service.trello.update_card_description.assert_called_once()
+        desc = service.trello.update_card_description.call_args.kwargs["desc"]
+        self.assertIn("Endereco: Rua das Flores", desc)
+        self.assertIn("CEP: 01000-000", desc)
 
     def test_create_offboarding_card_from_email_with_today_and_recipient_name(self) -> None:
         service = DiscordTrelloService(build_settings())

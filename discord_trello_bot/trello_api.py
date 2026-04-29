@@ -67,6 +67,20 @@ class TrelloApiClient(JsonApiClient):
         params = self._with_auth({"text": text})
         return self.request("POST", f"cards/{card_id}/actions/comments", params=params)
 
+    def get_card(self, card_id: str, *, fields: str = "id,name,url,desc") -> dict:
+        return self.request(
+            "GET",
+            f"cards/{card_id}",
+            params=self._with_auth({"fields": fields}),
+        )
+
+    def update_card_description(self, *, card_id: str, desc: str) -> dict:
+        return self.request(
+            "PUT",
+            f"cards/{card_id}",
+            params=self._with_auth({"desc": desc}),
+        )
+
     def create_card(
         self,
         *,

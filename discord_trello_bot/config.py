@@ -48,6 +48,7 @@ class Settings:
     gmail_query: str = "newer_than:7d (onboarding OR offboarding OR admissao OR admissão OR contratação OR desligamento OR subject:Offboarding)"
     gmail_processed_label_name: str = "Infra Ops Processado"
     gmail_max_results: int = 10
+    gmail_backfill_onboarding_descriptions: bool = False
 
 
 def _require_env(name: str) -> str:
@@ -88,6 +89,17 @@ def _int_env(name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"A variavel de ambiente {name} precisa ser maior que zero.")
     return value
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "y", "sim", "s"}:
+        return True
+    if raw in {"0", "false", "no", "n", "nao", "não"}:
+        return False
+    raise ValueError(f"A variavel de ambiente {name} precisa ser true ou false.")
 
 
 def _timezone_env(name: str, default: str) -> ZoneInfo:
@@ -202,4 +214,8 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         ).strip()
         or "Infra Ops Processado",
         gmail_max_results=_int_env("GMAIL_MAX_RESULTS", 10),
+        gmail_backfill_onboarding_descriptions=_bool_env(
+            "GMAIL_BACKFILL_ONBOARDING_DESCRIPTIONS",
+            False,
+        ),
     )
