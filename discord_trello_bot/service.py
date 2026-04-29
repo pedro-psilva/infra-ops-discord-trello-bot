@@ -436,6 +436,19 @@ class DiscordTrelloService:
             LOGGER.info("Card existente encontrado no Trello: %s.", card_name)
             return existing_card, False
 
+        compatible_card = self._find_compatible_task_card(task)
+        if compatible_card is not None:
+            LOGGER.info(
+                "Card existente compativel encontrado no Trello: %s -> %s.",
+                card_name,
+                compatible_card.name,
+            )
+            return {
+                "id": compatible_card.id,
+                "url": compatible_card.url,
+                "name": compatible_card.name,
+            }, False
+
         card = self.trello.create_card_from_template(
             card_name=card_name,
             due_iso=self._build_due_iso(task.effective_date),
@@ -443,8 +456,29 @@ class DiscordTrelloService:
         )
         return card, True
 
+    def _find_compatible_task_card(self, task: ParsedTask) -> TaskCard | None:
+        same_date_cards = [
+            card
+            for card in self.trello.list_open_task_cards(task.task_type)
+            if card.effective_date == task.effective_date
+        ]
+        for card in same_date_cards:
+            if _employee_names_match(task.employee_name, card.employee_name):
+                return card
+
+        first_name_matches = [
+            card
+            for card in same_date_cards
+            if _single_first_name_match(task.employee_name, card.employee_name)
+        ]
+        if len(first_name_matches) == 1:
+            return first_name_matches[0]
+        return None
+
     def _is_stale_task(self, task: ParsedTask) -> bool:
         today = datetime.now(tz=self.settings.timezone).date()
+        if task.task_type is TaskType.ONBOARDING:
+            return task.effective_date < today
         oldest_allowed_date = today - timedelta(days=PAST_TASK_GRACE_DAYS)
         return task.effective_date < oldest_allowed_date
 
@@ -689,6 +723,7 @@ COMPLEMENT_PHRASES = (
     "alterar",
     "atualizar",
 )
+NAME_CONNECTOR_WORDS = {"da", "das", "de", "do", "dos", "e"}
 
 
 def _has_complement_signal(text: str) -> bool:
@@ -808,3 +843,42 @@ def _normalize_lookup(text: str) -> str:
         if unicodedata.category(character) != "Mn"
     )
     return re.sub(r"\s+", " ", without_accents).strip()
+
+
+def _name_tokens(name: str) -> list[str]:
+    normalized = _normalize_lookup(name)
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    return [
+        token
+        for token in re.split(r"\s+", normalized)
+        if token and token not in NAME_CONNECTOR_WORDS
+    ]
+
+
+def _employee_names_match(left: str, right: str) -> bool:
+    left_tokens = _name_tokens(left)
+    right_tokens = _name_tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    if left_tokens == right_tokens:
+        return True
+    if left_tokens[0] != right_tokens[0]:
+        return False
+
+    left_set = set(left_tokens)
+    right_set = set(right_tokens)
+    smaller = left_set if len(left_set) <= len(right_set) else right_set
+    larger = right_set if smaller is left_set else left_set
+    if len(smaller) >= 2 and smaller.issubset(larger):
+        return True
+
+    overlap = len(left_set & right_set)
+    return overlap >= 2 and overlap / min(len(left_set), len(right_set)) >= 0.8
+
+
+def _single_first_name_match(left: str, right: str) -> bool:
+    left_tokens = _name_tokens(left)
+    right_tokens = _name_tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    return len(left_tokens) == 1 and left_tokens[0] == right_tokens[0]

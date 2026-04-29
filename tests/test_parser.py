@@ -80,6 +80,14 @@ class TaskParserTests(unittest.TestCase):
         self.assertEqual(result.task.employee_name, "Simone Tolisano Meirelles")
         self.assertEqual(result.task.effective_date.isoformat(), "2026-04-27")
 
+    def test_parse_onboarding_strips_trailing_punctuation_from_name(self) -> None:
+        message = build_message("Onboarding Ana Júlia! Data de Admissao: 04/05/2026")
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Ana Júlia")
+
     def test_parse_onboarding_keeps_address_as_note(self) -> None:
         message = build_message(
             "Onboarding\n"

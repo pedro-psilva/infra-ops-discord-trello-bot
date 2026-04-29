@@ -371,7 +371,7 @@ def _looks_like_name(candidate: str) -> bool:
 
 
 def _clean_name(raw: str) -> str | None:
-    name = raw.strip(" .,-:;|/\t")
+    name = raw.strip(" .,-:;|/!?\t")
     name = name.strip("*_`")
     name = re.sub(r"\s*<[^>]+>\s*$", "", name).strip()
     name = re.split(
@@ -391,7 +391,7 @@ def _clean_name(raw: str) -> str | None:
         maxsplit=1,
         flags=re.IGNORECASE,
     )[0]
-    name = name.strip(" .,-:;|/\t")
+    name = name.strip(" .,-:;|/!?\t")
     name = re.sub(r"\s{2,}", " ", name)
 
     if not name:

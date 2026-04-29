@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 from discord_trello_bot.config import ConfirmationMode, Settings
-from discord_trello_bot.models import DiscordMessage, EmailMessage, RequestedCard, TaskCard, TaskType
+from discord_trello_bot.models import DiscordMessage, EmailMessage, ParsedTask, RequestedCard, TaskCard, TaskType
 from discord_trello_bot.service import DiscordTrelloService
 
 
@@ -293,6 +293,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.trello = Mock()
         service.gmail = Mock()
         service.trello.find_open_card_by_name.return_value = None
+        service.trello.list_open_task_cards.return_value = []
         service.trello.create_card_from_template.return_value = {
             "id": "card-1",
             "url": "https://trello/card-1",
@@ -361,11 +362,60 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertIn("Endereco: Rua das Flores", comment)
         self.assertIn("Cargo: Analista de Operacoes", comment)
 
+    def test_email_matches_existing_card_with_compatible_name_same_date(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.gmail = Mock()
+        service.trello.find_open_card_by_name.return_value = None
+        service.trello.list_open_task_cards.return_value = [
+            TaskCard(
+                id="existing-card",
+                url="https://trello/existing-card",
+                name="[Onboarding] Ana Júlia Simões Silvério - 04/05/2026",
+                task_type=TaskType.ONBOARDING,
+                employee_name="Ana Júlia Simões Silvério",
+                effective_date=datetime(2026, 5, 4).date(),
+            )
+        ]
+        email_message = EmailMessage(
+            id="email-compatible-name",
+            thread_id="thread-compatible-name",
+            sender="rh@example.com",
+            subject="Onboarding Ana Júlia!",
+            body=(
+                "Data de Admissao: 04/05/2026\n"
+                "Endereco: Rua das Flores, 123 - Centro - Sao Paulo/SP"
+            ),
+            timestamp=datetime(2026, 4, 24, 10, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=(),
+        )
+
+        outcome, created_count = service._process_email_message(email_message)
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 0)
+        service.trello.create_card_from_template.assert_not_called()
+        self.assertEqual(service.trello.add_comment.call_args.kwargs["card_id"], "existing-card")
+
+    def test_past_onboarding_is_stale_without_grace_period(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        yesterday = datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date() - timedelta(days=1)
+        task = ParsedTask(
+            task_type=TaskType.ONBOARDING,
+            employee_name="Ana Paula Souza",
+            effective_date=yesterday,
+            notes=(),
+            raw_excerpt="",
+        )
+
+        self.assertTrue(service._is_stale_task(task))
+
     def test_create_offboarding_card_from_email_with_today_and_recipient_name(self) -> None:
         service = DiscordTrelloService(build_settings())
         service.trello = Mock()
         service.gmail = Mock()
         service.trello.find_open_card_by_name.return_value = None
+        service.trello.list_open_task_cards.return_value = []
         service.trello.create_card_from_template.return_value = {
             "id": "card-offboarding",
             "url": "https://trello/card-offboarding",
@@ -479,6 +529,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.trello = Mock()
         service.discord = Mock()
         service.trello.find_open_card_by_name.return_value = None
+        service.trello.list_open_task_cards.return_value = []
         service.trello.create_card_from_template.return_value = {
             "id": "card-offboarding",
             "url": "https://trello/card-offboarding",
