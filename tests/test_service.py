@@ -461,6 +461,32 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertIn("Endereco: Rua das Flores", desc)
         self.assertIn("CEP: 01000-000", desc)
 
+    def test_backfill_ignores_generic_onboarding_instruction_email(self) -> None:
+        service = DiscordTrelloService(
+            replace(build_settings(), gmail_backfill_onboarding_descriptions=True)
+        )
+        service.trello = Mock()
+        email_message = EmailMessage(
+            id="email-generic",
+            thread_id="thread-generic",
+            sender="rh@example.com",
+            subject="Onboarding Ana Paula Souza",
+            body=(
+                "Nome Completo: Ana Paula Souza\n"
+                "Data de Admissao: 05/05/2026\n"
+                "Acesse seu e-mail institucional.\n"
+                "Recebimento de notebook, perifericos e kit onboarding."
+            ),
+            timestamp=datetime(2026, 4, 24, 10, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=("processed",),
+        )
+
+        updated_count = service._backfill_onboarding_description_from_email(email_message)
+
+        self.assertEqual(updated_count, 0)
+        service.trello.find_open_card_by_name.assert_not_called()
+        service.trello.update_card_description.assert_not_called()
+
     def test_create_offboarding_card_from_email_with_today_and_recipient_name(self) -> None:
         service = DiscordTrelloService(build_settings())
         service.trello = Mock()

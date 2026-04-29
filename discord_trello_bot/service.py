@@ -453,7 +453,10 @@ class DiscordTrelloService:
 
         updated_count = 0
         for task in parse_result.tasks:
-            if task.task_type is not TaskType.ONBOARDING or not task.notes:
+            if (
+                task.task_type is not TaskType.ONBOARDING
+                or not _extract_onboarding_email_description_details(email_message.body)
+            ):
                 continue
             existing_card = self._find_existing_task_card(task)
             if existing_card is None:
@@ -621,7 +624,10 @@ class DiscordTrelloService:
             f"- Data: {task.effective_date.strftime('%d/%m/%Y')}",
         ]
 
-        if task.task_type is TaskType.ONBOARDING and task.notes:
+        if (
+            task.task_type is TaskType.ONBOARDING
+            and _extract_onboarding_email_description_details(email_message.body)
+        ):
             lines.extend(["", "Informacoes adicionais adicionadas na descricao do card."])
         elif task.notes:
             lines.extend(["", "Informacoes adicionais detectadas:"])
@@ -635,7 +641,7 @@ class DiscordTrelloService:
         task: ParsedTask,
         email_message: EmailMessage,
     ) -> None:
-        if task.task_type is not TaskType.ONBOARDING or not task.notes:
+        if task.task_type is not TaskType.ONBOARDING:
             return
 
         card = self.trello.get_card(card_id, fields="id,desc")
@@ -955,7 +961,9 @@ def _upsert_onboarding_email_details_section(
     email_message: EmailMessage,
     timezone,
 ) -> str:
-    notes = _unique_compact_lines(task.notes)
+    notes = _unique_compact_lines(
+        tuple(_extract_onboarding_email_description_details(email_message.body))
+    )
     if not notes:
         return current_desc
 
@@ -993,3 +1001,36 @@ def _unique_compact_lines(values: tuple[str, ...]) -> list[str]:
         seen.add(key)
         lines.append(compact)
     return lines
+
+
+def _extract_onboarding_email_description_details(body: str) -> list[str]:
+    details: list[str] = []
+    field_pattern = re.compile(
+        r"^\s*(?:[-*]\s*)?"
+        r"(?P<label>"
+        r"endere[cç]o(?:\s+(?:de\s+entrega|completo))?|"
+        r"logradouro|rua|avenida|bairro|cidade|cep|n[uú]mero|numero|complemento|"
+        r"telefone|celular|cargo|[aá]rea|gestor|l[ií]der|modalidade|"
+        r"notebook(?:\s+e\s+perif[eé]ricos)?|perif[eé]ricos"
+        r")\s*[:\-]\s*(?P<value>.+)$",
+        re.IGNORECASE,
+    )
+    address_line_pattern = re.compile(
+        r"^\s*(?:rua|r\.|avenida|av\.|alameda|travessa)\b.+\d+",
+        re.IGNORECASE,
+    )
+
+    for line in re.split(r"\n+", body):
+        cleaned = line.strip(" -*\t")
+        if not cleaned:
+            continue
+        field_match = field_pattern.match(cleaned)
+        if field_match:
+            label = field_match.group("label").strip()
+            value = field_match.group("value").strip()
+            if value:
+                details.append(f"{label}: {value}")
+            continue
+        if address_line_pattern.match(cleaned):
+            details.append(cleaned)
+    return details
