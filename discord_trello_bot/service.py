@@ -396,6 +396,16 @@ class DiscordTrelloService:
         synthetic_message = self._build_email_task_message(email_message)
         parse_result = self.parser.parse_message(synthetic_message)
         if not parse_result.tasks:
+            updated_count = self._sync_onboarding_details_email_to_existing_cards(email_message)
+            if updated_count:
+                LOGGER.info(
+                    "E-mail %s atualizou descricao de %s card(s) de onboarding existente(s).",
+                    email_message.id,
+                    updated_count,
+                )
+                if self.gmail is not None:
+                    self.gmail.mark_processed(email_message.id)
+                return "created", 0
             LOGGER.info("E-mail %s ignorado: %s.", email_message.id, parse_result.reason)
             return "skipped", 0
 
@@ -449,7 +459,7 @@ class DiscordTrelloService:
         synthetic_message = self._build_email_task_message(email_message)
         parse_result = self.parser.parse_message(synthetic_message)
         if not parse_result.tasks:
-            return 0
+            return self._sync_onboarding_details_email_to_existing_cards(email_message)
 
         updated_count = 0
         for task in parse_result.tasks:
@@ -473,6 +483,37 @@ class DiscordTrelloService:
                 email_message=email_message,
             )
             updated_count += 1
+        return updated_count
+
+    def _sync_onboarding_details_email_to_existing_cards(self, email_message: EmailMessage) -> int:
+        if not _extract_onboarding_email_description_details(email_message.body):
+            return 0
+
+        today = datetime.now(tz=self.settings.timezone).date()
+        future_onboarding_cards = [
+            card
+            for card in self.trello.list_open_task_cards(TaskType.ONBOARDING)
+            if card.effective_date >= today
+        ]
+        matched_cards = _match_complement_cards(
+            text=f"{email_message.subject}\n{email_message.body}",
+            cards=future_onboarding_cards,
+        )
+        updated_count = 0
+        for card in matched_cards:
+            task = ParsedTask(
+                task_type=TaskType.ONBOARDING,
+                employee_name=card.employee_name,
+                effective_date=card.effective_date,
+                notes=tuple(_extract_onboarding_email_description_details(email_message.body)),
+                raw_excerpt=email_message.body[:1800],
+            )
+            if self._sync_email_details_to_card_description(
+                card_id=card.id,
+                task=task,
+                email_message=email_message,
+            ):
+                updated_count += 1
         return updated_count
 
     def _get_or_create_task_card(self, task: ParsedTask) -> tuple[dict, bool]:
@@ -640,9 +681,9 @@ class DiscordTrelloService:
         card_id: str,
         task: ParsedTask,
         email_message: EmailMessage,
-    ) -> None:
+    ) -> bool:
         if task.task_type is not TaskType.ONBOARDING:
-            return
+            return False
 
         card = self.trello.get_card(card_id, fields="id,desc")
         current_desc = str(card.get("desc") or "")
@@ -654,6 +695,8 @@ class DiscordTrelloService:
         )
         if updated_desc != current_desc:
             self.trello.update_card_description(card_id=card_id, desc=updated_desc)
+            return True
+        return False
 
     def _build_complement_trello_comment(
         self,

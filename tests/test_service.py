@@ -412,6 +412,48 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertEqual(service.trello.add_comment.call_args.kwargs["card_id"], "existing-card")
         service.trello.update_card_description.assert_called_once()
 
+    def test_email_with_only_details_updates_existing_future_onboarding_card(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.gmail = Mock()
+        service.trello.list_open_task_cards.return_value = [
+            TaskCard(
+                id="existing-card",
+                url="https://trello/existing-card",
+                name="[Onboarding] Ana Paula Souza - 05/05/2026",
+                task_type=TaskType.ONBOARDING,
+                employee_name="Ana Paula Souza",
+                effective_date=datetime(2026, 5, 5).date(),
+            )
+        ]
+        service.trello.get_card.return_value = {"id": "existing-card", "desc": ""}
+        email_message = EmailMessage(
+            id="email-details-only",
+            thread_id="thread-details-only",
+            sender="rh@example.com",
+            subject="Dados cadastrais Ana Paula Souza",
+            body=(
+                "Ana Paula Souza\n"
+                "Endereco: Rua das Flores, 123 - Centro - Sao Paulo/SP\n"
+                "CEP: 01000-000\n"
+                "Cargo: Analista de Operacoes"
+            ),
+            timestamp=datetime(2026, 4, 24, 10, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=(),
+        )
+
+        outcome, created_count = service._process_email_message(email_message)
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created_count, 0)
+        service.trello.create_card_from_template.assert_not_called()
+        service.trello.add_comment.assert_not_called()
+        service.trello.update_card_description.assert_called_once()
+        desc = service.trello.update_card_description.call_args.kwargs["desc"]
+        self.assertIn("Endereco: Rua das Flores", desc)
+        self.assertIn("Cargo: Analista de Operacoes", desc)
+        service.gmail.mark_processed.assert_called_once_with("email-details-only")
+
     def test_past_onboarding_is_stale_without_grace_period(self) -> None:
         service = DiscordTrelloService(build_settings())
         yesterday = datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date() - timedelta(days=1)
