@@ -409,6 +409,24 @@ class DiscordTrelloService:
             LOGGER.info("E-mail %s ignorado: %s.", email_message.id, parse_result.reason)
             return "skipped", 0
 
+        if _should_treat_email_as_onboarding_details_only(email_message, parse_result.tasks):
+            updated_count = self._sync_onboarding_details_email_to_existing_cards(email_message)
+            if updated_count:
+                LOGGER.info(
+                    "E-mail %s tratado como complemento e atualizou %s card(s) de onboarding existente(s).",
+                    email_message.id,
+                    updated_count,
+                )
+                if self.gmail is not None:
+                    self.gmail.mark_processed(email_message.id)
+                return "created", 0
+            LOGGER.info(
+                "E-mail %s ignorado: contem detalhes de onboarding, mas nao tem sinal forte "
+                "de criacao nem card futuro compativel.",
+                email_message.id,
+            )
+            return "skipped", 0
+
         try:
             processed_count = 0
             created_count = 0
@@ -580,7 +598,10 @@ class DiscordTrelloService:
             part
             for part in (
                 email_message.subject,
-                _build_email_recipient_line(email_message.recipient),
+                _build_email_recipient_line(
+                    email_message.recipient,
+                    account_email=self.settings.gmail_user_email,
+                ),
                 email_message.body,
             )
             if part.strip()
@@ -837,6 +858,29 @@ COMPLEMENT_PHRASES = (
     "atualizar",
 )
 NAME_CONNECTOR_WORDS = {"da", "das", "de", "do", "dos", "e"}
+ONBOARDING_CREATION_SUBJECT_PHRASES = (
+    "onboarding",
+    "admissao",
+    "contratacao",
+    "novo colaborador",
+    "nova colaboradora",
+)
+ONBOARDING_DATE_FIELD_PHRASES = (
+    "data de admissao",
+    "data de entrada",
+    "admissao:",
+    "admissao -",
+    "entrada:",
+    "entrada -",
+)
+ONBOARDING_IDENTITY_FIELD_PHRASES = (
+    "nome completo:",
+    "nome:",
+    "colaborador:",
+    "colaboradora:",
+    "funcionario:",
+    "funcionaria:",
+)
 
 
 def _has_complement_signal(text: str) -> bool:
@@ -845,6 +889,32 @@ def _has_complement_signal(text: str) -> bool:
     return any(keyword in normalized for keyword in normalized_keywords) or any(
         phrase in normalized for phrase in COMPLEMENT_PHRASES
     )
+
+
+def _should_treat_email_as_onboarding_details_only(
+    email_message: EmailMessage,
+    tasks: tuple[ParsedTask, ...],
+) -> bool:
+    if not any(task.task_type is TaskType.ONBOARDING for task in tasks):
+        return False
+    if not _extract_onboarding_email_description_details(email_message.body):
+        return False
+    return not _has_strong_onboarding_email_creation_signal(email_message)
+
+
+def _has_strong_onboarding_email_creation_signal(email_message: EmailMessage) -> bool:
+    normalized_subject = _normalize_lookup(email_message.subject)
+    normalized_body = _normalize_lookup(email_message.body)
+    subject_says_creation = any(
+        phrase in normalized_subject
+        for phrase in ONBOARDING_CREATION_SUBJECT_PHRASES
+    )
+    body_has_date = any(phrase in normalized_body for phrase in ONBOARDING_DATE_FIELD_PHRASES)
+    body_has_identity = any(phrase in normalized_body for phrase in ONBOARDING_IDENTITY_FIELD_PHRASES)
+
+    if body_has_identity and body_has_date:
+        return True
+    return subject_says_creation and body_has_date
 
 
 def _match_complement_cards(*, text: str, cards: list[TaskCard]) -> list[TaskCard]:
@@ -920,11 +990,23 @@ def _extract_urls_from_messages(messages: list[DiscordMessage]) -> list[str]:
     return urls
 
 
-def _build_email_recipient_line(recipient: str) -> str:
+def _build_email_recipient_line(recipient: str, *, account_email: str | None = None) -> str:
+    if account_email and _extract_email_address(recipient).casefold() == account_email.strip().casefold():
+        return ""
     recipient_name = _extract_email_display_name(recipient)
     if not recipient_name:
         return ""
     return f"Destinatario: {recipient_name}"
+
+
+def _extract_email_address(value: str) -> str:
+    cleaned = value.strip()
+    match = re.search(r"<([^>]+)>", cleaned)
+    if match:
+        return match.group(1).strip()
+    if "@" in cleaned and not re.search(r"\s", cleaned):
+        return cleaned
+    return ""
 
 
 def _extract_email_display_name(value: str) -> str:

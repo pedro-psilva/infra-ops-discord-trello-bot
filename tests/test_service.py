@@ -454,6 +454,38 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         self.assertIn("Cargo: Analista de Operacoes", desc)
         service.gmail.mark_processed.assert_called_once_with("email-details-only")
 
+    def test_onboarding_shipping_reply_email_does_not_create_card_without_existing_match(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.settings = replace(service.settings, gmail_user_email="pedro.paulo@iebtinnovation.com")
+        service.trello = Mock()
+        service.gmail = Mock()
+        service.trello.list_open_task_cards.return_value = []
+        email_message = EmailMessage(
+            id="email-shipping-reply",
+            thread_id="thread-shipping-reply",
+            sender="Maria Eduarda Neves <mariaeduarda.cns25@gmail.com>",
+            recipient="Pedro Paulo <pedro.paulo@iebtinnovation.com>",
+            subject="Re: Informacoes sobre envios - IEBT",
+            body=(
+                "Pedro Paulo\n"
+                "30/04/2027\n"
+                "Kit onboarding com notebook e perifericos.\n"
+                "Rua Professor Jose Vieira de Mendonca, 770\n"
+                "CEP: 31310-260 - Belo Horizonte - MG/Brasil"
+            ),
+            timestamp=datetime(2026, 4, 30, 10, 18, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=(),
+        )
+
+        outcome, created_count = service._process_email_message(email_message)
+
+        self.assertEqual(outcome, "skipped")
+        self.assertEqual(created_count, 0)
+        service.trello.create_card_from_template.assert_not_called()
+        service.trello.add_comment.assert_not_called()
+        service.trello.update_card_description.assert_not_called()
+        service.gmail.mark_processed.assert_not_called()
+
     def test_past_onboarding_is_stale_without_grace_period(self) -> None:
         service = DiscordTrelloService(build_settings())
         yesterday = datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date() - timedelta(days=1)
