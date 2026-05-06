@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date
 
 from .config import Settings
+
+
+LOGGER = logging.getLogger(__name__)
 from .http import JsonApiClient
 from .models import TaskCard, TaskType
 
@@ -204,6 +208,7 @@ def _parse_task_card(card: dict) -> TaskCard | None:
         re.IGNORECASE,
     )
     if not match:
+        LOGGER.debug("Card '%s' ignorado: nome fora do padrao esperado.", name)
         return None
 
     day = int(match.group("day"))

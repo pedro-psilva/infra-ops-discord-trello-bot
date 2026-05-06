@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import html
 import re
 from datetime import datetime, timezone
@@ -10,6 +11,9 @@ from typing import Any
 import requests
 
 from .config import Settings
+
+
+LOGGER = logging.getLogger(__name__)
 from .http import ApiError, JsonApiClient
 from .models import EmailMessage
 
@@ -37,6 +41,8 @@ class GmailApiClient:
             },
         )
         refs = message_refs.get("messages", []) if isinstance(message_refs, dict) else []
+        if isinstance(message_refs, dict) and "messages" not in message_refs:
+            LOGGER.debug("Gmail retornou resposta sem campo 'messages' para query '%s'.", self.settings.gmail_query)
         return [self.get_message(str(ref["id"])) for ref in refs if ref.get("id")]
 
     def get_message(self, message_id: str) -> EmailMessage:
@@ -102,16 +108,23 @@ class GmailApiClient:
         )
 
     def _refresh_access_token(self) -> str:
-        response = requests.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": self.settings.gmail_client_id,
-                "client_secret": self.settings.gmail_client_secret,
-                "refresh_token": self.settings.gmail_refresh_token,
-                "grant_type": "refresh_token",
-            },
-            timeout=self.settings.request_timeout_seconds,
-        )
+        try:
+            response = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": self.settings.gmail_client_id,
+                    "client_secret": self.settings.gmail_client_secret,
+                    "refresh_token": self.settings.gmail_refresh_token,
+                    "grant_type": "refresh_token",
+                },
+                timeout=self.settings.request_timeout_seconds,
+            )
+        except requests.RequestException as exc:
+            raise ApiError(
+                status_code=0,
+                message="Falha de conexao ao renovar access token do Gmail.",
+                body=str(exc),
+            ) from exc
         if response.status_code >= 400:
             raise ApiError(
                 status_code=response.status_code,

@@ -13,6 +13,32 @@ from .models import DiscordMessage, ParseResult, ParsedTask, TaskType
 NAME_WORD = r"[A-Za-zÀ-ÖØ-öø-ÿ'.-]+"
 NAME_CONNECTORS = {"da", "das", "de", "do", "dos", "e"}
 
+# Regex para _clean_name — compiladas uma vez
+_CLEAN_NAME_DATE_SUFFIX_RE = re.compile(
+    r"\s+[-–—]\s*(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}-\d{2}-\d{2})"
+)
+_CLEAN_NAME_LABEL_PREFIX_RE = re.compile(
+    r"^(?:nome(?:\s+completo)?|colaborador(?:a)?|funcion[aá]ri[oa]|employee|pessoa|destinat[aá]rio)\s*[:\-]\s*",
+    re.IGNORECASE,
+)
+_CLEAN_NAME_STOPWORD_SPLIT_RE = re.compile(
+    r"(?:data|dia|endere[cç]o|logradouro|rua|avenida|bairro|cidade|cep|telefone|celular|e-?mail|cargo|[áa]rea|gestor|l[ií]der|modalidade|obs(?:erva[cç][aã]o)?|observa[cç][aã]o|quer|precisa|vai|retirar|buscar|devolver|uber|perif[eé]ricos?)",
+    re.IGNORECASE,
+)
+_CLEAN_NAME_WHITESPACE_RE = re.compile(r"\s{2,}")
+# Remove anotações parentéticas no final do nome, ex: "(é de BH)", "(Mercantil)"
+_CLEAN_NAME_PARENTHETICAL_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+RAW_EXCERPT_MAX_LEN = 1800
+
+# Cabeçalho de seção de data: "Data (07/07)", "**Data (11/05)**", "Data: 07/07" etc.
+DATE_SECTION_HEADER_PATTERN = re.compile(
+    r"(?:^|\n)\s*\*{0,2}\s*[Dd]ata\s*[:\-]?\s*[\(\[]?\s*"
+    r"(\d{1,2}/\d{1,2}(?:/\d{2,4})?)"
+    r"\s*[\)\]]?\s*\*{0,2}\s*(?=\n|$)",
+    re.MULTILINE,
+)
+
 ONBOARDING_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
     (re.compile(r"\bonboardings?\b", re.IGNORECASE), 3),
     (re.compile(r"\bonboards?\b", re.IGNORECASE), 3),
@@ -162,9 +188,32 @@ class TaskParser:
         if task_type is None:
             return ParseResult(reason="tipo de tarefa nao identificado")
 
+        relative_base = message.timestamp.astimezone(self.settings.timezone)
+
+        # Tenta parsing por seções de data (ex: "Data (07/07)" ... "Data (11/05)" ...)
+        sections = _split_into_date_sections(text, relative_base=relative_base)
+        if sections:
+            all_tasks: list[ParsedTask] = []
+            for section_date, section_text in sections:
+                names = _extract_employee_names(text=section_text, task_type=task_type)
+                notes = tuple(_extract_notes(section_text))
+                for name in names:
+                    all_tasks.append(
+                        ParsedTask(
+                            task_type=task_type,
+                            employee_name=name,
+                            effective_date=section_date,
+                            notes=notes,
+                            raw_excerpt=section_text[:RAW_EXCERPT_MAX_LEN],
+                        )
+                    )
+            if all_tasks:
+                return ParseResult(tasks=tuple(all_tasks))
+
+        # Fallback: parsing de data única
         effective_date = _extract_date(
             text=text,
-            relative_base=message.timestamp.astimezone(self.settings.timezone),
+            relative_base=relative_base,
             timezone_name=str(self.settings.timezone),
         )
         if effective_date is None:
@@ -175,7 +224,7 @@ class TaskParser:
             return ParseResult(reason="nome do colaborador nao identificado")
 
         notes = tuple(_extract_notes(text))
-        raw_excerpt = text[:1800]
+        raw_excerpt = text[:RAW_EXCERPT_MAX_LEN]
         return ParseResult(
             tasks=tuple(
                 ParsedTask(
@@ -374,71 +423,5 @@ def _clean_name(raw: str) -> str | None:
     name = raw.strip(" .,-:;|/!?\t")
     name = name.strip("*_`")
     name = re.sub(r"\s*<[^>]+>\s*$", "", name).strip()
-    name = re.split(
-        r"\s+[-–—]\s*(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}-\d{2}-\d{2})\b",
-        name,
-        maxsplit=1,
-    )[0]
-    name = re.sub(
-        r"^(?:nome(?:\s+completo)?|colaborador(?:a)?|funcion[aá]ri[oa]|employee|pessoa|destinat[aá]rio)\s*[:\-]\s*",
-        "",
-        name,
-        flags=re.IGNORECASE,
-    )
-    name = re.split(
-        r"\b(?:data|dia|endere[cç]o|logradouro|rua|avenida|bairro|cidade|cep|telefone|celular|e-?mail|cargo|[áa]rea|gestor|l[ií]der|modalidade|obs(?:erva[cç][aã]o)?|observa[cç][aã]o|quer|precisa|vai|retirar|buscar|devolver|uber|perif[eé]ricos?)\b",
-        name,
-        maxsplit=1,
-        flags=re.IGNORECASE,
-    )[0]
-    name = name.strip(" .,-:;|/!?\t")
-    name = re.sub(r"\s{2,}", " ", name)
-
-    if not name:
-        return None
-    if any(char.isdigit() for char in name):
-        return None
-    if name.lower() in NAME_STOPWORDS:
-        return None
-    if name.startswith("<@") and name.endswith(">"):
-        return None
-    if not _looks_like_name(name):
-        return None
-
-    return name
-
-
-def _clean_greeting_name(raw: str) -> str | None:
-    name = raw.strip(" .,!?:;|/\t")
-    name = re.sub(r"\s{2,}", " ", name)
-    if not name or any(char.isdigit() for char in name):
-        return None
-
-    words = name.split()
-    if len(words) > 4:
-        return None
-    for word in words:
-        lowered = word.lower()
-        if lowered in NAME_CONNECTORS:
-            continue
-        if lowered in NAME_STOPWORDS:
-            return None
-        if not word[0].isalpha() or not word[0].isupper():
-            return None
-
-    return name
-
-
-def _extract_notes(text: str) -> list[str]:
-    notes: list[str] = []
-    for line in re.split(r"\n+", text):
-        cleaned_line = line.strip(" -*\t")
-        if not cleaned_line:
-            continue
-
-        lowered = cleaned_line.lower()
-        if any(keyword in lowered for keyword in NOTE_KEYWORDS):
-            if cleaned_line not in notes:
-                notes.append(cleaned_line)
-
-    return notes
+    name = _CLEAN_NAME_PARENTHETICAL_RE.sub("", name).strip()
+    name = _CLEAN_NAME_DAT

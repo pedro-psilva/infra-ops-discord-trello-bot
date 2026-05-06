@@ -484,7 +484,61 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.trello.create_card_from_template.assert_not_called()
         service.trello.add_comment.assert_not_called()
         service.trello.update_card_description.assert_not_called()
-        service.gmail.mark_processed.assert_not_called()
+        # Com a correcao, replies sao sempre marcados como processados para evitar reprocessamento
+        service.gmail.mark_processed.assert_called_once_with("email-shipping-reply")
+
+    def test_onboarding_reply_email_does_not_create_card(self) -> None:
+        """Reply de onboarding nao deve criar card mesmo que o parser detecte tarefa."""
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.gmail = Mock()
+        service.trello.list_open_task_cards.return_value = []
+        email_message = EmailMessage(
+            id="email-onboarding-reply",
+            thread_id="thread-onboarding-reply",
+            sender="rh@example.com",
+            recipient="ti@example.com",
+            subject="Re: Onboarding Carlos Henrique - 12/05",
+            body=(
+                "Confirmado! Carlos Henrique comeca dia 12/05/2026.\n"
+                "Pode preparar o equipamento."
+            ),
+            timestamp=datetime(2026, 5, 4, 9, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=(),
+        )
+
+        outcome, created_count = service._process_email_message(email_message)
+
+        self.assertEqual(outcome, "skipped")
+        self.assertEqual(created_count, 0)
+        service.trello.create_card_from_template.assert_not_called()
+        service.trello.add_comment.assert_not_called()
+        service.trello.update_card_description.assert_not_called()
+        service.gmail.mark_processed.assert_called_once_with("email-onboarding-reply")
+
+    def test_enc_forward_email_does_not_create_card(self) -> None:
+        """Encaminhamento com prefixo 'Enc:' (Outlook PT-BR) nao deve criar card."""
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.gmail = Mock()
+        service.trello.list_open_task_cards.return_value = []
+        email_message = EmailMessage(
+            id="email-enc-forward",
+            thread_id="thread-enc-forward",
+            sender="gestor@example.com",
+            recipient="ti@example.com",
+            subject="Enc: Offboarding Fernanda Lima - 15/05",
+            body="Segue para conhecimento. Fernanda Lima sai dia 15/05/2026.",
+            timestamp=datetime(2026, 5, 4, 14, 0, tzinfo=ZoneInfo("America/Sao_Paulo")),
+            label_ids=(),
+        )
+
+        outcome, created_count = service._process_email_message(email_message)
+
+        self.assertEqual(outcome, "skipped")
+        self.assertEqual(created_count, 0)
+        service.trello.create_card_from_template.assert_not_called()
+        service.gmail.mark_processed.assert_called_once_with("email-enc-forward")
 
     def test_past_onboarding_is_stale_without_grace_period(self) -> None:
         service = DiscordTrelloService(build_settings())
@@ -722,6 +776,190 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         )
         service.trello.add_comment.assert_called_once()
         service.discord.add_reaction.assert_called_once()
+
+class ExtractOnboardingEmailDescriptionDetailsTests(unittest.TestCase):
+    def test_extracts_address_field(self) -> None:
+        from discord_trello_bot.service import _extract_onboarding_email_description_details
+        body = "Endereco: Rua das Flores, 123 - Centro - SP"
+        result = _extract_onboarding_email_description_details(body)
+        self.assertTrue(any("Rua das Flores" in item for item in result))
+
+    def test_extracts_multiple_fields(self) -> None:
+        from discord_trello_bot.service import _extract_onboarding_email_description_details
+        body = "Cargo: Analista\nTelefone: 11 99999-0000\nModalidade: Hibrido"
+        result = _extract_onboarding_email_description_details(body)
+        self.assertEqual(len(result), 3)
+        self.assertTrue(any("Cargo" in item for item in result))
+        self.assertTrue(any("Telefone" in item for item in result))
+        self.assertTrue(any("Modalidade" in item for item in result))
+
+    def test_extracts_street_address_line(self) -> None:
+        from discord_trello_bot.service import _extract_onboarding_email_description_details
+        body = "Rua Professor Jose Vieira de Mendonca, 770"
+        result = _extract_onboarding_email_description_details(body)
+        self.assertGreaterEqual(len(result), 1)
+        self.assertIn("Rua Professor Jose Vieira de Mendonca, 770", result)
+
+    def test_ignores_lines_without_known_fields(self) -> None:
+        from discord_trello_bot.service import _extract_onboarding_email_description_details
+        body = "Ola tudo bem?\nPrecisamos conversar sobre o processo."
+        result = _extract_onboarding_email_description_details(body)
+        self.assertEqual(result, [])
+
+    def test_field_with_bullet_prefix(self) -> None:
+        from discord_trello_bot.service import _extract_onboarding_email_description_details
+        body = "- Cargo: Desenvolvedor\n* Gestor: Carla Mendes"
+        result = _extract_onboarding_email_description_details(body)
+        self.assertEqual(len(result), 2)
+
+    def test_empty_body(self) -> None:
+        from discord_trello_bot.service import _extract_onboarding_email_description_details
+        result = _extract_onboarding_email_description_details("")
+        self.assertEqual(result, [])
+
+
+class FindCompatibleTaskCardTests(unittest.TestCase):
+    def test_find_compatible_task_card_exact_name_same_date(self) -> None:
+        from datetime import date as date_cls
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.trello.list_open_task_cards.return_value = [
+            TaskCard(
+                id="card-1",
+                url="https://trello/card-1",
+                name="[Onboarding] Ana Paula Souza - 15/05/2026",
+                task_type=TaskType.ONBOARDING,
+                employee_name="Ana Paula Souza",
+                effective_date=date_cls(2026, 5, 15),
+            )
+        ]
+        service.trello.find_open_card_by_name.return_value = None
+        task = ParsedTask(
+            task_type=TaskType.ONBOARDING,
+            employee_name="Ana Paula Souza",
+            effective_date=date_cls(2026, 5, 15),
+            notes=(),
+            raw_excerpt="",
+        )
+        result = service._find_compatible_task_card(task)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], "card-1")
+
+    def test_find_compatible_task_card_partial_name_same_date(self) -> None:
+        from datetime import date as date_cls
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.trello.list_open_task_cards.return_value = [
+            TaskCard(
+                id="card-2",
+                url="https://trello/card-2",
+                name="[Onboarding] Ana Paula Souza - 15/05/2026",
+                task_type=TaskType.ONBOARDING,
+                employee_name="Ana Paula Souza",
+                effective_date=date_cls(2026, 5, 15),
+            )
+        ]
+        service.trello.find_open_card_by_name.return_value = None
+        task = ParsedTask(
+            task_type=TaskType.ONBOARDING,
+            employee_name="Ana Souza",
+            effective_date=date_cls(2026, 5, 15),
+            notes=(),
+            raw_excerpt="",
+        )
+        result = service._find_compatible_task_card(task)
+        self.assertIsNotNone(result)
+
+    def test_find_compatible_task_card_no_match_different_date(self) -> None:
+        from datetime import date as date_cls
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.trello.list_open_task_cards.return_value = [
+            TaskCard(
+                id="card-3",
+                url="https://trello/card-3",
+                name="[Onboarding] Ana Paula Souza - 20/05/2026",
+                task_type=TaskType.ONBOARDING,
+                employee_name="Ana Paula Souza",
+                effective_date=date_cls(2026, 5, 20),
+            )
+        ]
+        service.trello.find_open_card_by_name.return_value = None
+        task = ParsedTask(
+            task_type=TaskType.ONBOARDING,
+            employee_name="Ana Paula Souza",
+            effective_date=date_cls(2026, 5, 15),
+            notes=(),
+            raw_excerpt="",
+        )
+        result = service._find_compatible_task_card(task)
+        self.assertIsNone(result)
+
+
+class OpenAIRequestRefinerTests(unittest.TestCase):
+    def _build_refiner_settings(self) -> Settings:
+        return replace(build_settings(), openai_api_key="sk-test-key")
+
+    def test_refine_returns_improved_card(self) -> None:
+        from discord_trello_bot.openai_request_refiner import OpenAIRequestRefiner
+        from datetime import date
+        settings = self._build_refiner_settings()
+        refiner = OpenAIRequestRefiner(settings)
+        refiner.client = Mock()
+        refiner.client.request.return_value = {
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": '{"title": "Revisar contrato", "summary": "Revisar o contrato antes do prazo.", "details": "Validar com o juridico."}',
+                }],
+            }]
+        }
+        card = RequestedCard(
+            title="revisar contrato",
+            summary="revisar",
+            due_date=date(2026, 5, 10),
+            instruction="crie card",
+            source_excerpt="revisar contrato",
+            context_excerpt="",
+        )
+        result = refiner.refine(requested_card=card, command_message=build_message(), context_messages=[])
+        self.assertEqual(result.title, "Revisar contrato")
+        self.assertIn("prazo", result.summary)
+
+    def test_refine_raises_on_empty_response(self) -> None:
+        from discord_trello_bot.openai_request_refiner import OpenAIRequestRefiner
+        settings = self._build_refiner_settings()
+        refiner = OpenAIRequestRefiner(settings)
+        refiner.client = Mock()
+        refiner.client.request.return_value = {"output": []}
+        card = RequestedCard(title="x", summary="y", due_date=None, instruction="z", source_excerpt="", context_excerpt="")
+        with self.assertRaises(ValueError):
+            refiner.refine(requested_card=card, command_message=build_message(), context_messages=[])
+
+    def test_refine_raises_on_invalid_json(self) -> None:
+        from discord_trello_bot.openai_request_refiner import OpenAIRequestRefiner
+        settings = self._build_refiner_settings()
+        refiner = OpenAIRequestRefiner(settings)
+        refiner.client = Mock()
+        refiner.client.request.return_value = {
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "nao e json"}]}]
+        }
+        card = RequestedCard(title="x", summary="y", due_date=None, instruction="z", source_excerpt="", context_excerpt="")
+        with self.assertRaises(ValueError):
+            refiner.refine(requested_card=card, command_message=build_message(), context_messages=[])
+
+    def test_refine_raises_when_title_missing(self) -> None:
+        from discord_trello_bot.openai_request_refiner import OpenAIRequestRefiner
+        settings = self._build_refiner_settings()
+        refiner = OpenAIRequestRefiner(settings)
+        refiner.client = Mock()
+        refiner.client.request.return_value = {
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": '{"title": "", "summary": "algo", "details": ""}'}]}]
+        }
+        card = RequestedCard(title="x", summary="y", due_date=None, instruction="z", source_excerpt="", context_excerpt="")
+        with self.assertRaises(ValueError):
+            refiner.refine(requested_card=card, command_message=build_message(), context_messages=[])
 
 
 if __name__ == "__main__":

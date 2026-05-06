@@ -179,5 +179,129 @@ class TaskParserTests(unittest.TestCase):
         self.assertEqual(result.task.effective_date.isoformat(), "2026-04-27")
 
 
+class CleanNameParentheticalTests(unittest.TestCase):
+    """Garante que anotacoes parenteticas no final do nome sao removidas."""
+
+    def setUp(self) -> None:
+        self.parser = TaskParser(build_settings())
+
+    def test_parenthetical_annotation_stripped(self) -> None:
+        message = build_message(
+            "Onboarding\nData (11/05)\n- Joao Silva (e de BH)"
+        )
+        result = self.parser.parse_message(message)
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Joao Silva")
+
+    def test_parenthetical_company_annotation_stripped(self) -> None:
+        message = build_message(
+            "Onboarding\nData: 11/05\n- Carlos Eduardo Melo (Mercantil)"
+        )
+        result = self.parser.parse_message(message)
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Carlos Eduardo Melo")
+
+    def test_name_without_parenthetical_unchanged(self) -> None:
+        message = build_message(
+            "Onboarding\nNome: Ana Paula Ferreira\nData: 15/05"
+        )
+        result = self.parser.parse_message(message)
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Ana Paula Ferreira")
+
+
+class MultiDateSectionParserTests(unittest.TestCase):
+    """Garante que mensagens com multiplos cabecalhos 'Data (dd/mm)' geram
+    cards com as datas corretas para cada secao."""
+
+    def setUp(self) -> None:
+        self.parser = TaskParser(build_settings())
+
+    def test_two_date_sections_produce_tasks_with_correct_dates(self) -> None:
+        message = build_message(
+            "Onboardings proximos:\n\n"
+            "Data (07/07)\n"
+            "- Alice Mendonca\n"
+            "- Bruno Carvalho\n\n"
+            "Data (11/05)\n"
+            "- Carlos Duarte\n"
+            "- Diana Rocha\n"
+        )
+        result = self.parser.parse_message(message)
+
+        self.assertEqual(len(result.tasks), 4)
+        names = [t.employee_name for t in result.tasks]
+        self.assertIn("Alice Mendonca", names)
+        self.assertIn("Bruno Carvalho", names)
+        self.assertIn("Carlos Duarte", names)
+        self.assertIn("Diana Rocha", names)
+
+        date_section1 = [t for t in result.tasks if t.employee_name in ("Alice Mendonca", "Bruno Carvalho")]
+        date_section2 = [t for t in result.tasks if t.employee_name in ("Carlos Duarte", "Diana Rocha")]
+        self.assertTrue(all(t.effective_date.isoformat() == "2026-07-07" for t in date_section1))
+        self.assertTrue(all(t.effective_date.isoformat() == "2026-05-11" for t in date_section2))
+
+    def test_two_date_sections_with_parenthetical_annotations(self) -> None:
+        message = build_message(
+            "Onboardings proximos:\n\n"
+            "Data (07/07)\n"
+            "- Ana Lima\n"
+            "- Beatriz Costa\n"
+            "- Carla Moura\n"
+            "- Diego Pinto\n"
+            "- Eduardo Farias\n\n"
+            "Data (11/05)\n"
+            "- Felipe Gomes (e de BH)\n"
+            "- Gabriela Souza (Mercantil)\n"
+            "- Henrique Nunes\n"
+        )
+        result = self.parser.parse_message(message)
+
+        self.assertEqual(len(result.tasks), 8)
+        names = [t.employee_name for t in result.tasks]
+        self.assertIn("Felipe Gomes", names)
+        self.assertIn("Gabriela Souza", names)
+        self.assertIn("Henrique Nunes", names)
+        self.assertNotIn("Felipe Gomes (e de BH)", names)
+        self.assertNotIn("Gabriela Souza (Mercantil)", names)
+
+        second_section_tasks = [
+            t for t in result.tasks
+            if t.employee_name in ("Felipe Gomes", "Gabriela Souza", "Henrique Nunes")
+        ]
+        self.assertTrue(all(t.effective_date.isoformat() == "2026-05-11" for t in second_section_tasks))
+
+    def test_single_date_section_falls_back_to_normal_parsing(self) -> None:
+        message = build_message(
+            "Onboardings proximos:\n\n"
+            "Data (07/07)\n"
+            "- Ana Lima\n"
+            "- Beatriz Costa\n"
+        )
+        result = self.parser.parse_message(message)
+
+        self.assertEqual(len(result.tasks), 2)
+        self.assertTrue(all(t.effective_date.isoformat() == "2026-07-07" for t in result.tasks))
+
+    def test_bold_date_section_headers_recognized(self) -> None:
+        message = build_message(
+            "Onboardings proximos:\n\n"
+            "**Data (07/07)**\n"
+            "- Ana Lima\n\n"
+            "**Data (11/05)**\n"
+            "- Bruno Carvalho\n"
+        )
+        result = self.parser.parse_message(message)
+
+        self.assertEqual(len(result.tasks), 2)
+        ana = next(t for t in result.tasks if t.employee_name == "Ana Lima")
+        bruno = next(t for t in result.tasks if t.employee_name == "Bruno Carvalho")
+        self.assertEqual(ana.effective_date.isoformat(), "2026-07-07")
+        self.assertEqual(bruno.effective_date.isoformat(), "2026-05-11")
+
+
 if __name__ == "__main__":
     unittest.main()

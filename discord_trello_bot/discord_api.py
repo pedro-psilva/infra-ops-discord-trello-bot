@@ -5,7 +5,7 @@ from datetime import datetime
 from urllib.parse import quote
 
 from .config import Settings
-from .http import JsonApiClient
+from .http import ApiError, JsonApiClient
 from .models import DiscordMessage
 
 
@@ -80,8 +80,14 @@ class DiscordApiClient(JsonApiClient):
         collected.sort(key=lambda item: item.timestamp)
         return collected
 
-    def get_message(self, channel_id: str, message_id: str) -> DiscordMessage:
-        payload = self.request("GET", f"channels/{channel_id}/messages/{message_id}")
+    def get_message(self, channel_id: str, message_id: str) -> DiscordMessage | None:
+        try:
+            payload = self.request("GET", f"channels/{channel_id}/messages/{message_id}")
+        except ApiError as exc:
+            if exc.status_code == 404:
+                LOGGER.debug("Mensagem %s/%s nao encontrada (provavelmente deletada).", channel_id, message_id)
+                return None
+            raise
         return DiscordMessage.from_api(payload)
 
     def get_current_user_id(self) -> str:

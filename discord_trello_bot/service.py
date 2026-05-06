@@ -4,6 +4,7 @@ import logging
 import re
 import unicodedata
 from datetime import date, datetime, time, timedelta, timezone as _tz
+from email.utils import getaddresses
 
 UTC = _tz.utc
 
@@ -23,6 +24,7 @@ LOGGER = logging.getLogger(__name__)
 SUPPORTED_MESSAGE_TYPES = {0, 19}
 URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>\"]+", re.IGNORECASE)
 PAST_TASK_GRACE_DAYS = 3
+COMPACT_COMMENT_MAX_LEN = 500
 ONBOARDING_EMAIL_DETAILS_HEADING = "## Informacoes de onboarding recebidas por e-mail"
 
 
@@ -393,6 +395,39 @@ class DiscordTrelloService:
                 summary.errors += 1
 
     def _process_email_message(self, email_message: EmailMessage) -> tuple[str, int]:
+        # Respostas e encaminhamentos nunca criam card novo — apenas sincronizam
+        # detalhes em cards existentes se houver match, e sempre sao marcados como processados.
+        if _is_email_reply_or_forward(email_message.subject):
+            updated_count = self._sync_onboarding_details_email_to_existing_cards(email_message)
+            if updated_count:
+                LOGGER.info(
+                    "E-mail %s (resposta/encaminhamento) atualizou descricao de %s card(s) de onboarding existente(s).",
+                    email_message.id,
+                    updated_count,
+                )
+                if self.gmail is not None:
+                    try:
+                        self.gmail.mark_processed(email_message.id)
+                    except Exception:
+                        LOGGER.warning(
+                            "Falha ao marcar e-mail %s como processado. Sera reprocessado na proxima execucao.",
+                            email_message.id,
+                        )
+                return "created", 0
+            LOGGER.info(
+                "E-mail %s ignorado: resposta/encaminhamento nao abre card novo.",
+                email_message.id,
+            )
+            if self.gmail is not None:
+                try:
+                    self.gmail.mark_processed(email_message.id)
+                except Exception:
+                    LOGGER.warning(
+                        "Falha ao marcar e-mail %s como processado. Sera reprocessado na proxima execucao.",
+                        email_message.id,
+                    )
+            return "skipped", 0
+
         synthetic_message = self._build_email_task_message(email_message)
         parse_result = self.parser.parse_message(synthetic_message)
         if not parse_result.tasks:
@@ -418,13 +453,34 @@ class DiscordTrelloService:
                     updated_count,
                 )
                 if self.gmail is not None:
-                    self.gmail.mark_processed(email_message.id)
+                    try:
+                        self.gmail.mark_processed(email_message.id)
+                    except Exception:
+                        LOGGER.warning(
+                            "Falha ao marcar e-mail %s como processado. Sera reprocessado na proxima execucao.",
+                            email_message.id,
+                        )
                 return "created", 0
             LOGGER.info(
                 "E-mail %s ignorado: contem detalhes de onboarding, mas nao tem sinal forte "
                 "de criacao nem card futuro compativel.",
                 email_message.id,
             )
+            return "skipped", 0
+
+        if _should_treat_email_as_offboarding_reply_only(email_message, parse_result.tasks):
+            LOGGER.info(
+                "E-mail %s ignorado: resposta/encaminhamento de offboarding nao abre card novo.",
+                email_message.id,
+            )
+            if self.gmail is not None:
+                try:
+                    self.gmail.mark_processed(email_message.id)
+                except Exception:
+                    LOGGER.warning(
+                        "Falha ao marcar e-mail %s como processado. Sera reprocessado na proxima execucao.",
+                        email_message.id,
+                    )
             return "skipped", 0
 
         try:
@@ -467,7 +523,13 @@ class DiscordTrelloService:
                 return "skipped", 0
 
             if self.gmail is not None:
-                self.gmail.mark_processed(email_message.id)
+                try:
+                    self.gmail.mark_processed(email_message.id)
+                except Exception:
+                    LOGGER.warning(
+                        "Falha ao marcar e-mail %s como processado. Sera reprocessado na proxima execucao.",
+                        email_message.id,
+                    )
             return "created", created_count
         except (ApiError, ValueError):
             LOGGER.exception("Falha ao processar e-mail %s.", email_message.id)
@@ -836,6 +898,8 @@ class DiscordTrelloService:
                 break
             visited.add(key)
             context_message = self.discord.get_message(current_channel_id, current_message_id)
+            if context_message is None:
+                break
             context_messages.append(context_message)
             current_channel_id = context_message.referenced_channel_id or context_message.channel_id
             current_message_id = context_message.referenced_message_id
@@ -881,6 +945,7 @@ ONBOARDING_IDENTITY_FIELD_PHRASES = (
     "funcionario:",
     "funcionaria:",
 )
+REPLY_FORWARD_SUBJECT_PATTERN = re.compile(r"\b(?:re|res|fw|fwd|enc)\s*:", re.IGNORECASE)
 
 
 def _has_complement_signal(text: str) -> bool:
@@ -915,6 +980,19 @@ def _has_strong_onboarding_email_creation_signal(email_message: EmailMessage) ->
     if body_has_identity and body_has_date:
         return True
     return subject_says_creation and body_has_date
+
+
+def _should_treat_email_as_offboarding_reply_only(
+    email_message: EmailMessage,
+    tasks: tuple[ParsedTask, ...],
+) -> bool:
+    if not any(task.task_type is TaskType.OFFBOARDING for task in tasks):
+        return False
+    return _is_email_reply_or_forward(email_message.subject)
+
+
+def _is_email_reply_or_forward(subject: str) -> bool:
+    return REPLY_FORWARD_SUBJECT_PATTERN.search(_normalize_lookup(subject)) is not None
 
 
 def _match_complement_cards(*, text: str, cards: list[TaskCard]) -> list[TaskCard]:
@@ -1000,33 +1078,41 @@ def _build_email_recipient_line(recipient: str, *, account_email: str | None = N
 
 
 def _extract_email_address(value: str) -> str:
-    cleaned = value.strip()
-    match = re.search(r"<([^>]+)>", cleaned)
-    if match:
-        return match.group(1).strip()
-    if "@" in cleaned and not re.search(r"\s", cleaned):
-        return cleaned
+    for _name, address in getaddresses([value]):
+        if address:
+            return address.strip()
     return ""
 
 
 def _extract_email_display_name(value: str) -> str:
+    for display_name, address in getaddresses([value]):
+        cleaned_name = display_name.strip().strip('"')
+        if cleaned_name:
+            return cleaned_name
+        if address:
+            return _display_name_from_email_address(address)
+
     cleaned = value.strip()
     if not cleaned:
         return ""
     cleaned = re.sub(r"\s*<[^>]+>\s*$", "", cleaned).strip().strip('"')
     if "@" in cleaned:
-        local_part = cleaned.split("@", 1)[0]
-        pieces = [piece for piece in re.split(r"[._+-]+", local_part) if piece]
-        if len(pieces) < 2:
-            return ""
-        cleaned = " ".join(piece.capitalize() for piece in pieces)
+        return _display_name_from_email_address(cleaned)
     return cleaned
+
+
+def _display_name_from_email_address(address: str) -> str:
+    local_part = address.strip().split("@", 1)[0]
+    pieces = [piece for piece in re.split(r"[._+-]+", local_part) if piece]
+    if len(pieces) < 2:
+        return ""
+    return " ".join(piece.capitalize() for piece in pieces)
 
 
 def _compact_comment_text(text: str) -> str:
     compact = re.sub(r"\s+", " ", text).strip(" ,")
-    if len(compact) > 500:
-        compact = compact[:497].rstrip() + "..."
+    if len(compact) > COMPACT_COMMENT_MAX_LEN:
+        compact = compact[:COMPACT_COMMENT_MAX_LEN - 3].rstrip() + "..."
     return compact
 
 
@@ -1133,10 +1219,10 @@ def _extract_onboarding_email_description_details(body: str) -> list[str]:
     field_pattern = re.compile(
         r"^\s*(?:[-*]\s*)?"
         r"(?P<label>"
-        r"endere[cç]o(?:\s+(?:de\s+entrega|completo))?|"
-        r"logradouro|rua|avenida|bairro|cidade|cep|n[uú]mero|numero|complemento|"
-        r"telefone|celular|cargo|[aá]rea|gestor|l[ií]der|modalidade|"
-        r"notebook(?:\s+e\s+perif[eé]ricos)?|perif[eé]ricos"
+        r"endere[c\u00e7]o(?:\s+(?:de\s+entrega|completo))?|"
+        r"logradouro|rua|avenida|bairro|cidade|cep|n[u\u00fa]mero|numero|complemento|"
+        r"telefone|celular|cargo|[a\u00e1]rea|gestor|l[i\u00ed]der|modalidade|"
+        r"notebook(?:\s+e\s+perif[e\u00e9]ricos)?|perif[e\u00e9]ricos"
         r")\s*[:\-]\s*(?P<value>.+)$",
         re.IGNORECASE,
     )
