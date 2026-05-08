@@ -33,6 +33,7 @@ class Settings:
     lookback_days: int
     max_messages_per_channel: int
     log_level: str
+    discord_bot_user_id: str | None = None
     discord_api_base_url: str = "https://discord.com/api/v10"
     trello_api_base_url: str = "https://api.trello.com/1"
     request_timeout_seconds: float = 30.0
@@ -196,6 +197,7 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         lookback_days=lookback_days,
         max_messages_per_channel=_int_env("MAX_MESSAGES_PER_CHANNEL", 500),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
+        discord_bot_user_id=_optional_env("DISCORD_BOT_USER_ID"),
         openai_api_key=_optional_env("OPENAI_API_KEY"),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.5").strip() or "gpt-5.5",
         openai_reasoning_effort=_openai_reasoning_effort_env(),
@@ -216,9 +218,6 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         gmail_max_results=_int_env("GMAIL_MAX_RESULTS", 10),
         gmail_backfill_onboarding_descriptions=_bool_env(
             "GMAIL_BACKFILL_ONBOARDING_DESCRIPTIONS",
-            False,
-        ),
-    )
             False,
         ),
     )

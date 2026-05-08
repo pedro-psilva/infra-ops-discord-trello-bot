@@ -92,8 +92,13 @@ class DiscordApiClient(JsonApiClient):
 
     def get_current_user_id(self) -> str:
         if self._current_user_id is None:
-            payload = self.request("GET", "users/@me")
-            self._current_user_id = str(payload["id"])
+            # Usa o valor configurado via DISCORD_BOT_USER_ID para evitar chamadas
+            # desnecessarias ao endpoint users/@me (sujeito a rate limit global).
+            if self.settings.discord_bot_user_id:
+                self._current_user_id = self.settings.discord_bot_user_id
+            else:
+                payload = self.request("GET", "users/@me")
+                self._current_user_id = str(payload["id"])
         return self._current_user_id
 
     def get_current_member_role_ids(self) -> tuple[str, ...]:

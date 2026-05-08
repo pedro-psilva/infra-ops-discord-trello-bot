@@ -50,12 +50,17 @@ class DiscordTrelloService:
         summary = RunSummary()
         cutoff = datetime.now(tz=self.settings.timezone) - timedelta(days=self.settings.lookback_days)
         channel_modes = self._build_channel_modes()
-        bot_user_id = self.discord.get_current_user_id() if self.settings.discord_request_channel_ids else None
-        bot_role_ids = (
-            set(self.discord.get_current_member_role_ids())
-            if self.settings.discord_request_channel_ids
-            else set()
-        )
+        bot_user_id: str | None = None
+        bot_role_ids: set[str] = set()
+        if self.settings.discord_request_channel_ids:
+            try:
+                bot_user_id = self.discord.get_current_user_id()
+                bot_role_ids = set(self.discord.get_current_member_role_ids())
+            except ApiError:
+                LOGGER.warning(
+                    "Nao foi possivel obter o user/roles do bot (rate limit?). "
+                    "Processamento continua sem filtrar mensagens proprias."
+                )
 
         for channel_id, modes in channel_modes.items():
             summary.channels_scanned += 1
