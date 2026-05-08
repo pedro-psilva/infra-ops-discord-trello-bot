@@ -424,4 +424,82 @@ def _clean_name(raw: str) -> str | None:
     name = name.strip("*_`")
     name = re.sub(r"\s*<[^>]+>\s*$", "", name).strip()
     name = _CLEAN_NAME_PARENTHETICAL_RE.sub("", name).strip()
-    name = _CLEAN_NAME_DAT
+    name = _CLEAN_NAME_DATE_SUFFIX_RE.split(name, maxsplit=1)[0]
+    name = _CLEAN_NAME_LABEL_PREFIX_RE.sub("", name)
+    name = _CLEAN_NAME_STOPWORD_SPLIT_RE.split(name, maxsplit=1)[0]
+    name = name.strip(" .,-:;|/!?\t")
+    name = _CLEAN_NAME_WHITESPACE_RE.sub(" ", name)
+
+    if not name:
+        return None
+    if any(char.isdigit() for char in name):
+        return None
+    if name.lower() in NAME_STOPWORDS:
+        return None
+    if name.startswith("<@") and name.endswith(">"):
+        return None
+    if not _looks_like_name(name):
+        return None
+
+    return name
+
+
+def _clean_greeting_name(raw: str) -> str | None:
+    name = raw.strip(" .,!?:;|/\t")
+    name = _CLEAN_NAME_WHITESPACE_RE.sub(" ", name)
+    if not name or any(char.isdigit() for char in name):
+        return None
+
+    words = name.split()
+    if len(words) > 4:
+        return None
+    for word in words:
+        lowered = word.lower()
+        if lowered in NAME_CONNECTORS:
+            continue
+        if lowered in NAME_STOPWORDS:
+            return None
+        if not word[0].isalpha() or not word[0].isupper():
+            return None
+
+    return name
+
+
+def _split_into_date_sections(
+    text: str, *, relative_base: datetime
+) -> list[tuple[date, str]] | None:
+    """Divide o texto em seções por data quando há múltiplos cabeçalhos 'Data (dd/mm)'.
+
+    Retorna uma lista de (data, texto_da_seção) ou None se houver menos de 2 seções.
+    """
+    matches = list(DATE_SECTION_HEADER_PATTERN.finditer(text))
+    if len(matches) < 2:
+        return None
+
+    sections: list[tuple[date, str]] = []
+    for i, match in enumerate(matches):
+        date_token = match.group(1)
+        section_start = match.end()
+        section_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        section_text = text[section_start:section_end].strip()
+        parsed_date = _parse_explicit_date_token(date_token, default_year=relative_base.year)
+        if parsed_date is None:
+            continue
+        sections.append((parsed_date, section_text))
+
+    return sections if len(sections) >= 2 else None
+
+
+def _extract_notes(text: str) -> list[str]:
+    notes: list[str] = []
+    for line in re.split(r"\n+", text):
+        cleaned_line = line.strip(" -*\t")
+        if not cleaned_line:
+            continue
+
+        lowered = cleaned_line.lower()
+        if any(keyword in lowered for keyword in NOTE_KEYWORDS):
+            if cleaned_line not in notes:
+                notes.append(cleaned_line)
+
+    return notes
