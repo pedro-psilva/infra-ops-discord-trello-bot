@@ -118,19 +118,17 @@ class DiscordApiClient(JsonApiClient):
             headers={"Content-Length": "0"},
         )
 
-    def reply_to_message(self, channel_id: str, message_id: str, content: str) -> None:
-        self.request(
-            "POST",
-            f"channels/{channel_id}/messages",
-            json_body={
-                "content": content,
-                "allowed_mentions": {"parse": []},
-                "message_reference": {
-                    "message_id": message_id,
-                    "fail_if_not_exists": False,
-                },
-            },
-        )
+    def reply_to_message(self, channel_id: str, message_id: str | None, content: str) -> None:
+        body: dict = {
+            "content": content,
+            "allowed_mentions": {"parse": []},
+        }
+        if message_id is not None:
+            body["message_reference"] = {
+                "message_id": message_id,
+                "fail_if_not_exists": False,
+            }
+        self.request("POST", f"channels/{channel_id}/messages", json_body=body)
 
 
 def build_discord_message_url(guild_id: str, channel_id: str, message_id: str) -> str:

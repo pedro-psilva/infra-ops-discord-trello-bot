@@ -210,26 +210,11 @@ class DiscordTrelloService:
 
             # Pergunta cargo para tarefas sem cargo detectado (onboarding novo)
             for task in cargo_missing_tasks:
-                try:
-                    self.discord.reply_to_message(
-                        channel_id=message.channel_id,
-                        message_id=message.id,
-                        content=CARGO_QUESTION_TEMPLATE.format(
-                            name=task.employee_name,
-                            date=task.effective_date.strftime("%d/%m/%Y"),
-                            marker=CARGO_QUESTION_MARKER,
-                        ),
-                    )
-                    LOGGER.info(
-                        "Pergunta de cargo postada para %s (mensagem %s).",
-                        task.employee_name,
-                        message.id,
-                    )
-                except (ApiError, ValueError):
-                    LOGGER.warning(
-                        "Falha ao postar pergunta de cargo para %s.",
-                        task.employee_name,
-                    )
+                self._post_cargo_question(
+                    task=task,
+                    origin_channel_id=message.channel_id,
+                    origin_message_id=message.id,
+                )
 
             # Confirmacao normal apenas quando nao ha cargo pendente
             if (
@@ -913,6 +898,88 @@ class DiscordTrelloService:
         lines = ["Cards criados no Trello:"]
         lines.extend(f"- {card_url}" for card_url in card_urls)
         return "\n".join(lines)
+
+    def _post_cargo_question(
+        self,
+        *,
+        task: ParsedTask,
+        origin_channel_id: str,
+        origin_message_id: str,
+    ) -> None:
+        """Posta a pergunta de cargo no canal de origem ou, se falhar, num canal de requisicoes.
+
+        Tenta primeiro responder diretamente na mensagem original. Se o bot nao
+        tiver permissao de enviar mensagens naquele canal (403), tenta os canais
+        de DISCORD_REQUEST_CHANNEL_IDS como fallback.
+        """
+        content = CARGO_QUESTION_TEMPLATE.format(
+            name=task.employee_name,
+            date=task.effective_date.strftime("%d/%m/%Y"),
+            marker=CARGO_QUESTION_MARKER,
+        )
+        # Tenta responder no canal original
+        try:
+            self.discord.reply_to_message(
+                channel_id=origin_channel_id,
+                message_id=origin_message_id,
+                content=content,
+            )
+            LOGGER.info(
+                "Pergunta de cargo postada para %s no canal %s.",
+                task.employee_name,
+                origin_channel_id,
+            )
+            return
+        except ApiError as exc:
+            if exc.status_code != 403:
+                LOGGER.warning(
+                    "Falha ao postar pergunta de cargo para %s no canal %s: %s",
+                    task.employee_name,
+                    origin_channel_id,
+                    exc,
+                )
+                return
+            LOGGER.warning(
+                "Bot sem permissao de enviar mensagens no canal %s. "
+                "Tentando canal de requisicoes como fallback.",
+                origin_channel_id,
+            )
+
+        # Fallback: posta num canal de requisicoes com contexto adicional
+        message_url = build_discord_message_url(
+            guild_id=self.settings.discord_guild_id,
+            channel_id=origin_channel_id,
+            message_id=origin_message_id,
+        )
+        fallback_content = (
+            f"Onboarding de **{task.employee_name}** em **{task.effective_date.strftime('%d/%m/%Y')}** "
+            f"foi registrado, mas o cargo nao foi identificado. {CARGO_QUESTION_MARKER}\n"
+            f"Mensagem original: {message_url}\n"
+            f"Qual e o cargo de **{task.employee_name}**? Responda aqui com apenas o cargo."
+        )
+        for fallback_channel_id in self.settings.discord_request_channel_ids:
+            try:
+                self.discord.reply_to_message(
+                    channel_id=fallback_channel_id,
+                    message_id=None,
+                    content=fallback_content,
+                )
+                LOGGER.info(
+                    "Pergunta de cargo para %s postada no canal de fallback %s.",
+                    task.employee_name,
+                    fallback_channel_id,
+                )
+                return
+            except (ApiError, ValueError):
+                LOGGER.warning(
+                    "Falha ao postar pergunta de cargo no canal de fallback %s.",
+                    fallback_channel_id,
+                )
+
+        LOGGER.error(
+            "Nao foi possivel postar pergunta de cargo para %s em nenhum canal.",
+            task.employee_name,
+        )
 
     def _set_cargo_in_card_description(self, card_id: str, cargo: str) -> None:
         """Insere o cargo na primeira linha da descricao do card se ainda nao estiver la."""
