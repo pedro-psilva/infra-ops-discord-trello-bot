@@ -26,6 +26,12 @@ URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>\"]+", re.IGNORECASE)
 PAST_TASK_GRACE_DAYS = 3
 COMPACT_COMMENT_MAX_LEN = 500
 ONBOARDING_EMAIL_DETAILS_HEADING = "## Informacoes de onboarding recebidas por e-mail"
+CARGO_QUESTION_MARKER = "[cargo?]"
+CARGO_QUESTION_TEMPLATE = (
+    "Card criado para **{name}** em **{date}** \u2705\n"
+    "N\u00e3o identifiquei o cargo desta pessoa. Qual \u00e9 o cargo? {marker}\n"
+    "_(Responda a esta mensagem com apenas o cargo)_"
+)
 
 
 class DiscordTrelloService:
@@ -79,7 +85,18 @@ class DiscordTrelloService:
                 if message.author_is_bot and message.referenced_message_id
             }
 
+            # Processa respostas de cargo antes do loop principal
+            cargo_reply_ids: set[str] = set()
+            if "structured" in modes:
+                cargo_reply_ids = self._process_cargo_reply_messages(
+                    messages=messages,
+                    channel_id=channel_id,
+                    summary=summary,
+                )
+
             for message in messages:
+                if message.id in cargo_reply_ids:
+                    continue
                 summary.messages_scanned += 1
                 outcome, created_count = self._process_message(
                     message,
@@ -149,6 +166,7 @@ class DiscordTrelloService:
         try:
             card_urls: list[str] = []
             created_count = 0
+            cargo_missing_tasks: list[ParsedTask] = []
             for task in parse_result.tasks:
                 if self._is_stale_task(task):
                     LOGGER.info(
@@ -165,8 +183,8 @@ class DiscordTrelloService:
                     task.employee_name,
                     task.effective_date.isoformat(),
                 )
-                card, _was_created = self._get_or_create_task_card(task)
-                if _was_created:
+                card, was_created = self._get_or_create_task_card(task)
+                if was_created:
                     created_count += 1
                 card_id = str(card["id"])
                 card_url = str(card["url"])
@@ -175,6 +193,11 @@ class DiscordTrelloService:
                     card_id=card_id,
                     text=self._build_trello_comment(task=task, message=message),
                 )
+                # Atualiza descricao do card com cargo se disponivel
+                if task.cargo:
+                    self._set_cargo_in_card_description(card_id, task.cargo)
+                elif task.task_type is TaskType.ONBOARDING and was_created:
+                    cargo_missing_tasks.append(task)
 
             if not card_urls:
                 return "skipped", 0
@@ -185,7 +208,34 @@ class DiscordTrelloService:
                 emoji=self.settings.discord_reaction_emoji,
             )
 
-            if self.settings.discord_confirmation_mode in {ConfirmationMode.REPLY, ConfirmationMode.BOTH}:
+            # Pergunta cargo para tarefas sem cargo detectado (onboarding novo)
+            for task in cargo_missing_tasks:
+                try:
+                    self.discord.reply_to_message(
+                        channel_id=message.channel_id,
+                        message_id=message.id,
+                        content=CARGO_QUESTION_TEMPLATE.format(
+                            name=task.employee_name,
+                            date=task.effective_date.strftime("%d/%m/%Y"),
+                            marker=CARGO_QUESTION_MARKER,
+                        ),
+                    )
+                    LOGGER.info(
+                        "Pergunta de cargo postada para %s (mensagem %s).",
+                        task.employee_name,
+                        message.id,
+                    )
+                except (ApiError, ValueError):
+                    LOGGER.warning(
+                        "Falha ao postar pergunta de cargo para %s.",
+                        task.employee_name,
+                    )
+
+            # Confirmacao normal apenas quando nao ha cargo pendente
+            if (
+                not cargo_missing_tasks
+                and self.settings.discord_confirmation_mode in {ConfirmationMode.REPLY, ConfirmationMode.BOTH}
+            ):
                 self.discord.reply_to_message(
                     channel_id=message.channel_id,
                     message_id=message.id,
@@ -655,9 +705,7 @@ class DiscordTrelloService:
 
     def _is_stale_task(self, task: ParsedTask) -> bool:
         today = datetime.now(tz=self.settings.timezone).date()
-        if task.task_type is TaskType.ONBOARDING:
-            return task.effective_date < today
-        oldest_allowed_date = today - timedelta(days=PAST_TASK_GRACE_DAYS)
+        oldest_allowed_date = today - timedelta(days=self.settings.lookback_days)
         return task.effective_date < oldest_allowed_date
 
     def _build_email_task_message(self, email_message: EmailMessage) -> DiscordMessage:
@@ -724,6 +772,9 @@ class DiscordTrelloService:
             f"- Autor da mensagem: {message.author_name}",
             f"- Enviado em: {local_timestamp}",
         ]
+
+        if task.cargo:
+            lines.append(f"- Cargo: {task.cargo}")
 
         if task.notes:
             lines.extend(["", "Observacoes detectadas:"])
@@ -863,6 +914,106 @@ class DiscordTrelloService:
         lines.extend(f"- {card_url}" for card_url in card_urls)
         return "\n".join(lines)
 
+    def _set_cargo_in_card_description(self, card_id: str, cargo: str) -> None:
+        """Insere o cargo na primeira linha da descricao do card se ainda nao estiver la."""
+        try:
+            trello_card = self.trello.get_card(card_id, fields="id,desc")
+            current_desc = str(trello_card.get("desc") or "")
+            cargo_line = f"**Cargo:** {cargo}"
+            if cargo_line in current_desc:
+                return
+            new_desc = f"{cargo_line}\n\n{current_desc}".strip() if current_desc else cargo_line
+            self.trello.update_card_description(card_id=card_id, desc=new_desc)
+        except (ApiError, ValueError):
+            LOGGER.warning("Falha ao atualizar cargo no card %s.", card_id)
+
+    def _process_cargo_reply_messages(
+        self,
+        messages: list[DiscordMessage],
+        channel_id: str,
+        summary: RunSummary,
+    ) -> set[str]:
+        """Detecta respostas humanas as perguntas de cargo do bot e atualiza os cards.
+
+        Retorna o conjunto de IDs de mensagens processadas como respostas de cargo.
+        """
+        # Coleta mensagens do bot com a marca de pergunta de cargo
+        cargo_questions: dict[str, str] = {}  # bot_msg_id -> employee_name
+        for msg in messages:
+            if not msg.author_is_bot:
+                continue
+            if CARGO_QUESTION_MARKER not in msg.content:
+                continue
+            name_match = re.search(r"para \*\*(.+?)\*\*", msg.content)
+            if name_match:
+                cargo_questions[msg.id] = name_match.group(1)
+
+        if not cargo_questions:
+            return set()
+
+        processed_ids: set[str] = set()
+        for msg in messages:
+            if msg.author_is_bot:
+                continue
+            if msg.referenced_message_id not in cargo_questions:
+                continue
+            # Ja processado anteriormente
+            if msg.has_confirmation_reaction(self.settings.discord_reaction_emoji):
+                processed_ids.add(msg.id)
+                continue
+
+            employee_name = cargo_questions[msg.referenced_message_id]
+            cargo = msg.content.strip()
+            if not cargo or len(cargo.split()) > 10:
+                processed_ids.add(msg.id)
+                continue
+
+            try:
+                updated = self._apply_cargo_to_matching_card(
+                    employee_name=employee_name,
+                    cargo=cargo,
+                )
+                if updated:
+                    self.discord.add_reaction(
+                        channel_id=channel_id,
+                        message_id=msg.id,
+                        emoji=self.settings.discord_reaction_emoji,
+                    )
+                    LOGGER.info(
+                        "Cargo '%s' aplicado ao card de %s via resposta Discord %s.",
+                        cargo,
+                        employee_name,
+                        msg.id,
+                    )
+                else:
+                    LOGGER.warning(
+                        "Cargo recebido para %s, mas nenhum card aberto encontrado.",
+                        employee_name,
+                    )
+            except (ApiError, ValueError):
+                LOGGER.exception(
+                    "Falha ao aplicar cargo para %s a partir da mensagem %s.",
+                    employee_name,
+                    msg.id,
+                )
+                summary.errors += 1
+
+            processed_ids.add(msg.id)
+
+        return processed_ids
+
+    def _apply_cargo_to_matching_card(self, *, employee_name: str, cargo: str) -> bool:
+        """Encontra o card de onboarding do colaborador e atualiza com o cargo.
+
+        Retorna True se algum card foi atualizado.
+        """
+        cards = self.trello.list_open_task_cards(TaskType.ONBOARDING)
+        for card in cards:
+            if _employee_names_match(employee_name, card.employee_name):
+                self._set_cargo_in_card_description(card.id, cargo)
+                return True
+        return False
+
     def _build_channel_modes(self) -> dict[str, set[str]]:
         channel_modes: dict[str, set[str]] = {}
         for channel_id in self.settings.discord_channel_ids:
@@ -933,14 +1084,23 @@ ONBOARDING_CREATION_SUBJECT_PHRASES = (
     "contratacao",
     "novo colaborador",
     "nova colaboradora",
+    "solicitacao de equipamentos",
+    "kit de boas-vindas",
+    "boas-vindas",
 )
 ONBOARDING_DATE_FIELD_PHRASES = (
     "data de admissao",
     "data de entrada",
+    "data de inicio",
+    "data de ingresso",
     "admissao:",
     "admissao -",
     "entrada:",
     "entrada -",
+    "inicio:",
+    "inicio -",
+    "ingresso:",
+    "data:",
 )
 ONBOARDING_IDENTITY_FIELD_PHRASES = (
     "nome completo:",
@@ -949,6 +1109,10 @@ ONBOARDING_IDENTITY_FIELD_PHRASES = (
     "colaboradora:",
     "funcionario:",
     "funcionaria:",
+    "dados do colaborador",
+    "dados da colaboradora",
+    "informacoes do colaborador",
+    "informacoes da colaboradora",
 )
 REPLY_FORWARD_SUBJECT_PATTERN = re.compile(r"\b(?:re|res|fw|fwd|enc)\s*:", re.IGNORECASE)
 

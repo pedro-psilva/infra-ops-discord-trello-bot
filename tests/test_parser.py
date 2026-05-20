@@ -303,5 +303,66 @@ class MultiDateSectionParserTests(unittest.TestCase):
         self.assertEqual(bruno.effective_date.isoformat(), "2026-05-11")
 
 
+
+
+class CargoExtractionTests(unittest.TestCase):
+    """Garante que o cargo é extraído corretamente do texto da mensagem."""
+
+    def setUp(self) -> None:
+        self.parser = TaskParser(build_settings())
+
+    def test_cargo_extracted_from_asterisk_format(self) -> None:
+        """Onboarding DD/MM * Nome - Cargo (Local) -> cargo detectado."""
+        message = build_message("Onboarding 20/05 * Jonathan Tavares - Tech Lead Bamaq")
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Jonathan Tavares")
+        self.assertEqual(result.task.cargo, "Tech Lead Bamaq")
+
+    def test_cargo_extracted_with_location_parenthetical(self) -> None:
+        """Onboarding DD/MM * Nome - Cargo (Local) -> parentético de local não entra no cargo."""
+        message = build_message("Offboarding 11/05 * Gustavo Lucio Pereira (n é de bh)")
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Gustavo Lucio Pereira")
+        # Sem " - Cargo" no formato acima, cargo deve ser None
+        self.assertIsNone(result.task.cargo)
+
+    def test_cargo_extracted_from_dash_separator(self) -> None:
+        """Nome - Cargo sem asterisco também extrai o cargo."""
+        message = build_message("Onboarding\nNome: Jonathan Tavares - Tech Lead\nData: 20/05/2026")
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Jonathan Tavares")
+        self.assertEqual(result.task.cargo, "Tech Lead")
+
+    def test_cargo_none_when_no_separator(self) -> None:
+        """Sem separador ' - Cargo', cargo deve ser None."""
+        message = build_message(
+            "Onboarding\nNome: Maria Silva\nData: 22/04/2026"
+        )
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Maria Silva")
+        self.assertIsNone(result.task.cargo)
+
+    def test_cargo_not_extracted_when_separator_followed_by_date(self) -> None:
+        """' - DD/MM' não deve ser interpretado como cargo."""
+        message = build_message("Offboarding Jucilene Aparecida - 27/04")
+        result = self.parser.parse_message(message)
+
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Jucilene Aparecida")
+        self.assertIsNone(result.task.cargo)
+
 if __name__ == "__main__":
     unittest.main()

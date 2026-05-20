@@ -97,6 +97,7 @@ class ParsedTask:
     effective_date: date
     notes: tuple[str, ...]
     raw_excerpt: str
+    cargo: str | None = None
 
 
 @dataclass(frozen=True)

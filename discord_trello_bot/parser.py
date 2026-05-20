@@ -28,6 +28,10 @@ _CLEAN_NAME_STOPWORD_SPLIT_RE = re.compile(
 _CLEAN_NAME_WHITESPACE_RE = re.compile(r"\s{2,}")
 # Remove anotações parentéticas no final do nome, ex: "(é de BH)", "(Mercantil)"
 _CLEAN_NAME_PARENTHETICAL_RE = re.compile(r"\s*\([^)]*\)\s*$")
+# Separa nome do cargo/empresa após " - ", ex: "Jonathan Tavares - Tech Lead Bamaq"
+_CLEAN_NAME_ROLE_SEPARATOR_RE = re.compile(r"\s+-\s+.*$")
+# Detecta datas no cargo (usado para invalidar falsos positivos)
+_CARGO_DATE_SENTINEL_RE = re.compile(r"\b\d{1,2}/\d{1,2}\b")
 
 RAW_EXCERPT_MAX_LEN = 1800
 
@@ -82,6 +86,11 @@ ONBOARDING_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
         rf"(?P<name>{NAME_WORD}(?:\s+{NAME_WORD}){{0,9}})\s+(?:vai\s+)?(?:entrar|come[cç]ar|iniciar)",
         re.IGNORECASE,
     ),
+    # Formato "Onboarding DD/MM * Nome - Cargo (Local)" — asterisco como separador inline
+    re.compile(
+        rf"\*\s+(?P<name>{NAME_WORD}(?:\s+{NAME_WORD}){{1,9}})(?=\s*(?:-|\(|$))",
+        re.IGNORECASE,
+    ),
 )
 
 OFFBOARDING_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -91,6 +100,11 @@ OFFBOARDING_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
     ),
     re.compile(
         rf"(?P<name>{NAME_WORD}(?:\s+{NAME_WORD}){{0,9}})\s+(?:vai\s+)?(?:sair|ser\s+desligad[oa])",
+        re.IGNORECASE,
+    ),
+    # Formato "Offboarding DD/MM * Nome - Cargo (Local)" — asterisco como separador inline
+    re.compile(
+        rf"\*\s+(?P<name>{NAME_WORD}(?:\s+{NAME_WORD}){{1,9}})(?=\s*(?:-|\(|$))",
         re.IGNORECASE,
     ),
 )
@@ -198,6 +212,7 @@ class TaskParser:
                 names = _extract_employee_names(text=section_text, task_type=task_type)
                 notes = tuple(_extract_notes(section_text))
                 for name in names:
+                    cargo = _extract_cargo_for_name(section_text, name)
                     all_tasks.append(
                         ParsedTask(
                             task_type=task_type,
@@ -205,6 +220,7 @@ class TaskParser:
                             effective_date=section_date,
                             notes=notes,
                             raw_excerpt=section_text[:RAW_EXCERPT_MAX_LEN],
+                            cargo=cargo,
                         )
                     )
             if all_tasks:
@@ -233,6 +249,7 @@ class TaskParser:
                     effective_date=effective_date,
                     notes=notes,
                     raw_excerpt=raw_excerpt,
+                    cargo=_extract_cargo_for_name(text, employee_name),
                 )
                 for employee_name in employee_names
             )
@@ -424,6 +441,7 @@ def _clean_name(raw: str) -> str | None:
     name = name.strip("*_`")
     name = re.sub(r"\s*<[^>]+>\s*$", "", name).strip()
     name = _CLEAN_NAME_PARENTHETICAL_RE.sub("", name).strip()
+    name = _CLEAN_NAME_ROLE_SEPARATOR_RE.sub("", name).strip()
     name = _CLEAN_NAME_DATE_SUFFIX_RE.split(name, maxsplit=1)[0]
     name = _CLEAN_NAME_LABEL_PREFIX_RE.sub("", name)
     name = _CLEAN_NAME_STOPWORD_SPLIT_RE.split(name, maxsplit=1)[0]
@@ -463,6 +481,31 @@ def _clean_greeting_name(raw: str) -> str | None:
             return None
 
     return name
+
+
+def _extract_cargo_for_name(text: str, employee_name: str) -> str | None:
+    """Extrai o cargo do colaborador quando o texto tem formato 'Nome - Cargo (Local)'.
+
+    Retorna o cargo como string limpa, ou None se não identificado.
+    """
+    escaped = re.escape(employee_name)
+    match = re.search(
+        escaped + r"\s*-\s*([^(\n*]{2,60})(?=\s*\(|\s*\*|\s*$)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    cargo = match.group(1).strip(" .,;*_`\n\t")
+    if not cargo:
+        return None
+    # Invalida se parece com data (ex: "20/05")
+    if _CARGO_DATE_SENTINEL_RE.search(cargo):
+        return None
+    # Cargo não deve ter mais de 8 palavras
+    if len(cargo.split()) > 8:
+        return None
+    return cargo
 
 
 def _split_into_date_sections(
