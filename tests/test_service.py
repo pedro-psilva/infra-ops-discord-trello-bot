@@ -896,6 +896,41 @@ class FindCompatibleTaskCardTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class CargoReplyTests(unittest.TestCase):
+    def _build_service(self):
+        from datetime import date as date_cls
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.discord = Mock()
+        service.trello.list_open_task_cards.return_value = [
+            TaskCard(id="card-iza", url="https://trello/iza",
+                name="[Onboarding] Izabela Linke de Avellar - 06/07/2026",
+                task_type=TaskType.ONBOARDING, employee_name="Izabela Linke de Avellar",
+                effective_date=date_cls(2026, 7, 6))]
+        service.trello.get_card.return_value = {"id": "card-iza", "desc": ""}
+        return service
+
+    def test_cargo_reply_updates_card_description(self):
+        from discord_trello_bot.models import RunSummary
+        service = self._build_service()
+        bot_q = build_message(message_id="bot1", author_is_bot=True,
+            content="Card criado para **Izabela Linke de Avellar** em **06/07/2026** ✅\nNão identifiquei o cargo desta pessoa. Qual é o cargo? [cargo?]")
+        human = build_message(message_id="h1", content="Business Analyst", referenced_message_id="bot1")
+        processed = service._process_cargo_reply_messages(messages=[bot_q, human], channel_id="channel", summary=RunSummary())
+        self.assertIn("h1", processed)
+        service.trello.update_card_description.assert_called_once_with(card_id="card-iza", desc="**Cargo:** Business Analyst")
+        service.discord.add_reaction.assert_called_once()
+
+    def test_cargo_reply_matches_fallback_question_format(self):
+        from discord_trello_bot.models import RunSummary
+        service = self._build_service()
+        fb = build_message(message_id="bot2", author_is_bot=True,
+            content="Onboarding de **Izabela Linke de Avellar** em **06/07/2026** foi registrado, mas o cargo nao foi identificado. [cargo?]")
+        human = build_message(message_id="h2", content="Business Analyst", referenced_message_id="bot2")
+        service._process_cargo_reply_messages(messages=[fb, human], channel_id="channel", summary=RunSummary())
+        service.trello.update_card_description.assert_called_once_with(card_id="card-iza", desc="**Cargo:** Business Analyst")
+
+
 class OpenAIRequestRefinerTests(unittest.TestCase):
     def _build_refiner_settings(self) -> Settings:
         return replace(build_settings(), openai_api_key="sk-test-key")

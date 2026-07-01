@@ -817,10 +817,18 @@ class DiscordTrelloService:
             email_message=email_message,
             timezone=self.settings.timezone,
         )
-        if updated_desc != current_desc:
+        changed = updated_desc != current_desc
+        if changed:
             self.trello.update_card_description(card_id=card_id, desc=updated_desc)
-            return True
-        return False
+
+        # Sempre tenta definir o cargo no topo do card a partir do e-mail,
+        # independente de a secao de detalhes ter mudado ou nao.
+        cargo = _extract_cargo_from_email_body(email_message.body)
+        if cargo:
+            self._set_cargo_in_card_description(card_id, cargo)
+            LOGGER.info("Cargo '%s' definido no card %s a partir do e-mail.", cargo, card_id)
+
+        return changed
 
     def _build_complement_trello_comment(
         self,
@@ -1011,7 +1019,9 @@ class DiscordTrelloService:
                 continue
             if CARGO_QUESTION_MARKER not in msg.content:
                 continue
-            name_match = re.search(r"para \*\*(.+?)\*\*", msg.content)
+            # Casa tanto a pergunta padrao ("Card criado para **Nome**")
+            # quanto a de fallback ("Onboarding de **Nome** em ...").
+            name_match = re.search(r"(?:para|de) \*\*(.+?)\*\*", msg.content)
             if name_match:
                 cargo_questions[msg.id] = name_match.group(1)
 
@@ -1448,6 +1458,21 @@ def _unique_compact_lines(values: tuple[str, ...]) -> list[str]:
         seen.add(key)
         lines.append(compact)
     return lines
+
+
+def _extract_cargo_from_email_body(body: str) -> str | None:
+    """Extrai o valor do campo 'cargo' do corpo do e-mail, se presente como campo estruturado."""
+    pattern = re.compile(
+        r"^\s*(?:[-*]\s*)?cargo\s*[:\-]\s*(?P<value>.+)$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    match = pattern.search(body)
+    if not match:
+        return None
+    value = match.group("value").strip(" .,;*_`\t")
+    if not value or len(value.split()) > 10:
+        return None
+    return value
 
 
 def _extract_onboarding_email_description_details(body: str) -> list[str]:

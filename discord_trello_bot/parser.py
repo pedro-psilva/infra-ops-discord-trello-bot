@@ -484,28 +484,56 @@ def _clean_greeting_name(raw: str) -> str | None:
 
 
 def _extract_cargo_for_name(text: str, employee_name: str) -> str | None:
-    """Extrai o cargo do colaborador quando o texto tem formato 'Nome - Cargo (Local)'.
+    """Extrai o cargo do colaborador do texto da mensagem.
+
+    Reconhece dois formatos:
+    - "Nome - Cargo (Local)": cargo após o hífen.
+    - "Nome (Cargo)": cargo entre parênteses, ex.: "Izabela Linke de Avellar (Business Analyst)".
 
     Retorna o cargo como string limpa, ou None se não identificado.
     """
     escaped = re.escape(employee_name)
     match = re.search(
-        escaped + r"\s*-\s*([^(\n*]{2,60})(?=\s*\(|\s*\*|\s*$)",
+        escaped + r"\s*-\s*([^(\n*]{2,60}?)(?=\s*[(*\n]|\s*$)",
         text,
         re.IGNORECASE,
     )
-    if not match:
-        return None
-    cargo = match.group(1).strip(" .,;*_`\n\t")
+    if match:
+        cargo = match.group(1).strip(" .,;*_`\n\t")
+        if _is_probable_cargo(cargo):
+            return cargo
+
+    # Fallback: formato "Nome (Cargo)" — o parentético carrega o cargo.
+    paren_match = re.search(escaped + r"\s*\(([^)\n]{2,60})\)", text, re.IGNORECASE)
+    if paren_match:
+        cargo = paren_match.group(1).strip(" .,;*_`\n\t")
+        if _is_probable_cargo(cargo):
+            return cargo
+
+    return None
+
+
+def _is_probable_cargo(cargo: str) -> bool:
+    """Valida se uma string capturada parece de fato um cargo.
+
+    Descarta datas, textos muito longos e anotações que não são cargos
+    (ex.: "n é de bh", "é de BH"), exigindo que o primeiro caractere
+    alfabético seja maiúsculo — como em títulos de cargo próprios.
+    """
     if not cargo:
-        return None
+        return False
     # Invalida se parece com data (ex: "20/05")
     if _CARGO_DATE_SENTINEL_RE.search(cargo):
-        return None
+        return False
     # Cargo não deve ter mais de 8 palavras
     if len(cargo.split()) > 8:
-        return None
-    return cargo
+        return False
+    # O primeiro caractere alfabético deve ser maiúsculo. Isso separa cargos
+    # ("Business Analyst", "Estagiário...") de anotações em minúsculo.
+    for char in cargo:
+        if char.isalpha():
+            return char.isupper()
+    return False
 
 
 def _split_into_date_sections(

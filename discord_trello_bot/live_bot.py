@@ -7,7 +7,7 @@ from datetime import timedelta
 import discord
 
 from .config import Settings
-from .models import DiscordMessage, DiscordReaction
+from .models import DiscordMessage, DiscordReaction, RunSummary
 from .service import DiscordTrelloService
 
 
@@ -87,6 +87,19 @@ class InfraOpsDiscordClient(discord.Client):
             cutoff,
         )
         channel_messages = _merge_current_message(channel_messages, message)
+
+        # Respostas de cargo (humano respondendo a pergunta do bot) sao tratadas
+        # antes do fluxo normal. No modo listener isso e essencial: sem isso, a
+        # resposta com o cargo nunca era aplicada ao card.
+        if "structured" in modes:
+            cargo_reply_ids = self.service._process_cargo_reply_messages(
+                messages=channel_messages,
+                channel_id=message.channel_id,
+                summary=RunSummary(),
+            )
+            if message.id in cargo_reply_ids:
+                return "cargo_reply", 0
+
         bot_reply_reference_ids = {
             item.referenced_message_id
             for item in channel_messages

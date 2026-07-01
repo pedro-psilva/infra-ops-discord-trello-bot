@@ -364,5 +364,26 @@ class CargoExtractionTests(unittest.TestCase):
         self.assertEqual(result.task.employee_name, "Jucilene Aparecida")
         self.assertIsNone(result.task.cargo)
 
+    def test_cargo_extracted_from_parenthetical(self) -> None:
+        """Lista 'Nome (Cargo)' -> cargo detectado a partir do parentético."""
+        message = build_message(
+            "Onboarding – 06/07\n\n"
+            "• Izabela Linke de Avellar (Business Analyst)\n"
+            "• Henrique Pereira Furtado (Estagiário da IA e Dados)"
+        )
+        result = self.parser.parse_message(message)
+        cargos = {task.employee_name: task.cargo for task in result.tasks}
+        self.assertEqual(cargos.get("Izabela Linke de Avellar"), "Business Analyst")
+        self.assertEqual(cargos.get("Henrique Pereira Furtado"), "Estagiário da IA e Dados")
+
+    def test_cargo_parenthetical_ignores_non_cargo_annotation(self) -> None:
+        """Parentético em minúsculo (anotação, não cargo) deve continuar None."""
+        message = build_message("Offboarding 11/05 * Gustavo Lucio Pereira (n é de bh)")
+        result = self.parser.parse_message(message)
+        self.assertIsNotNone(result.task)
+        assert result.task is not None
+        self.assertEqual(result.task.employee_name, "Gustavo Lucio Pereira")
+        self.assertIsNone(result.task.cargo)
+
 if __name__ == "__main__":
     unittest.main()
