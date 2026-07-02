@@ -33,6 +33,7 @@ class Settings:
     lookback_days: int
     max_messages_per_channel: int
     log_level: str
+    discord_dm_allowed_user_ids: tuple[str, ...] = ()
     discord_bot_user_id: str | None = None
     discord_api_base_url: str = "https://discord.com/api/v10"
     trello_api_base_url: str = "https://api.trello.com/1"
@@ -174,6 +175,7 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         discord_guild_id=_require_env("DISCORD_GUILD_ID"),
         discord_channel_ids=discord_channel_ids,
         discord_request_channel_ids=discord_request_channel_ids,
+        discord_dm_allowed_user_ids=_csv_optional_env("DISCORD_DM_ALLOWED_USER_IDS"),
         discord_confirmation_mode=_confirmation_mode_env(),
         discord_reaction_emoji=os.getenv("DISCORD_REACTION_EMOJI", "✅").strip() or "✅",
         discord_reply_template=os.getenv(

@@ -135,6 +135,18 @@ Para deixar o bot escutando mencoes em tempo real:
 python main.py --listen
 ```
 
+## Atendimento por DM (mensagem direta)
+
+No modo listener (`--listen`), o bot tambem atende **mensagens diretas (DM)** e executa as acoes:
+
+- **Auto-deteccao:** se a DM tiver um onboarding/offboarding estruturado (mesmo formato dos canais, inclusive `Nome (Cargo)`), o bot cria o card, comenta e trata o cargo; se nao reconhecer, abre um **card de solicitacao** com o titulo `[DM] ...` a partir do texto livre. Em ambos os casos ele responde na propria DM com o link do card.
+- **Respostas de cargo** feitas dentro da DM tambem sao aplicadas ao card.
+- **Autorizacao:** so os IDs listados em `DISCORD_DM_ALLOWED_USER_IDS` (separados por virgula) podem acionar o bot por DM. Com a lista vazia, o atendimento por DM fica **desativado** (qualquer pessoa que compartilhe servidor com o bot conseguiria enviar DM, por isso a allowlist e importante).
+
+Requisitos no Discord Developer Portal: a intent privilegiada **Message Content** precisa estar ativada (ja e usada nos canais). As DMs usam a intent nao-privilegiada de mensagens diretas, ja habilitada no cliente.
+
+> Importante: o atendimento por DM **so funciona no modo listener** (processo sempre ligado). O GitHub Actions e polling e nao mantem a conexao com o Gateway, entao **nao** atende DM em tempo real.
+
 ## Hospedagem quase gratuita
 
 A opcao mais simples para custo zero e o **GitHub Actions**:
@@ -157,7 +169,19 @@ Para resposta rapida, use o modo listener:
 - comando: `python main.py --listen`
 - start command em hospedagem: `python main.py --listen`
 - `Procfile` incluido: `worker: python main.py --listen`
+- `Dockerfile` incluido: roda `python main.py --listen` em qualquer host de container
 - precisa de um ambiente que mantenha processo ligado; se o host dormir, o bot tambem para de escutar
+
+### Como ficar online 24/7 (para atender DM)
+
+O atendimento por DM exige um processo sempre ligado. O GitHub Actions **nao** serve para isso (e polling, nao mantem a conexao). Opcoes praticas, da mais simples para a mais robusta:
+
+1. **Maquina propria sempre ligada** (custo zero real): rodar `python main.py --listen` num PC/servidor interno que fica ligado. No Windows da para configurar como tarefa do Agendador iniciando no boot, ou um servico. E a opcao mais simples e sem cadastro externo.
+2. **Fly.io (free allowance)**: usa o `Dockerfile` deste repo. Passos: criar conta, `fly launch` (sem porta/HTTP, e um worker), definir os segredos com `fly secrets set DISCORD_BOT_TOKEN=... TRELLO_API_KEY=... DISCORD_DM_ALLOWED_USER_IDS=...`, e `fly deploy`.
+3. **Koyeb / Railway**: tambem aceitam o `Dockerfile`; Railway usa credito mensal, Koyeb tem um servico nano gratuito.
+4. **Oracle Cloud Always Free (VM)**: unica opcao de VM realmente gratuita 24/7; roda o `--listen` sob `systemd`. Setup mais trabalhoso.
+
+> Observacao honesta: nenhum host consegue ser configurado 100% de forma automatica por mim, porque todos exigem **criar uma conta** e **inserir o token/segredos do bot** no painel deles — isso precisa ser feito por voce. O que ja esta pronto aqui: o codigo, o `Dockerfile` e o `Procfile`. Se voce escolher um host, eu te acompanho passo a passo na configuracao.
 
 ## Segredos do GitHub Actions
 

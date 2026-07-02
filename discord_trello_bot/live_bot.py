@@ -19,6 +19,7 @@ class InfraOpsDiscordClient(discord.Client):
         intents = discord.Intents.default()
         intents.guilds = True
         intents.messages = True
+        intents.dm_messages = True
         intents.message_content = True
         super().__init__(intents=intents)
         self.settings = settings
@@ -32,7 +33,12 @@ class InfraOpsDiscordClient(discord.Client):
         LOGGER.info("Infra Ops conectado ao Discord como %s.", self.user)
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.guild is None or message.author.bot:
+        if message.author.bot:
+            return
+
+        # Mensagem direta (DM): sem servidor associado.
+        if message.guild is None:
+            await self._handle_direct_message(message)
             return
 
         channel_id = str(message.channel.id)
@@ -60,6 +66,56 @@ class InfraOpsDiscordClient(discord.Client):
             outcome,
             created_count,
         )
+
+    async def _handle_direct_message(self, message: discord.Message) -> None:
+        allowed_user_ids = self.settings.discord_dm_allowed_user_ids
+        if not allowed_user_ids:
+            return  # Recurso de DM desativado enquanto nao houver allowlist.
+
+        author_id = str(message.author.id)
+        if author_id not in allowed_user_ids:
+            LOGGER.info("DM de usuario nao autorizado %s ignorada.", author_id)
+            return
+
+        incoming_message = _message_from_discord_py(message)
+        try:
+            outcome, created_count = await asyncio.to_thread(
+                self._process_direct_message,
+                incoming_message,
+            )
+        except Exception:
+            LOGGER.exception("Falha ao processar DM %s.", message.id)
+            return
+
+        LOGGER.info(
+            "DM %s processada. resultado=%s criados=%s",
+            message.id,
+            outcome,
+            created_count,
+        )
+
+    def _process_direct_message(self, message: DiscordMessage) -> tuple[str, int]:
+        # Busca o historico recente da DM para tratar respostas de cargo
+        # (humano respondendo a pergunta do bot dentro da propria DM).
+        cutoff = message.timestamp.astimezone(self.settings.timezone) - timedelta(
+            days=self.settings.lookback_days
+        )
+        try:
+            dm_messages = self.service.discord.iter_messages_since(message.channel_id, cutoff)
+        except Exception:
+            LOGGER.warning("Nao foi possivel ler o historico da DM %s.", message.channel_id)
+            dm_messages = []
+        dm_messages = _merge_current_message(dm_messages, message)
+
+        cargo_reply_ids = self.service._process_cargo_reply_messages(
+            messages=dm_messages,
+            channel_id=message.channel_id,
+            summary=RunSummary(),
+        )
+        if message.id in cargo_reply_ids:
+            return "cargo_reply", 0
+
+        return self.service.process_direct_message(message)
 
     def _channel_modes(self, channel_id: str) -> set[str]:
         modes: set[str] = set()

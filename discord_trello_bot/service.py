@@ -232,6 +232,125 @@ class DiscordTrelloService:
             LOGGER.exception("Falha ao processar a mensagem %s.", message.id)
             return "error", 0
 
+    def process_direct_message(self, message: DiscordMessage) -> tuple[str, int]:
+        """Processa uma DM recebida pelo bot.
+
+        Auto-detecta: se o texto for um onboarding/offboarding estruturado, cria
+        o(s) card(s) e trata cargo; caso contrario, abre um card de solicitacao a
+        partir do texto livre. Responde na propria DM. A autorizacao do remetente
+        e responsabilidade de quem chama (o listener).
+        """
+        if not self._should_consider_message(message):
+            return "skipped", 0
+
+        parse_result = self.parser.parse_message(message)
+        if parse_result.tasks:
+            return self._process_dm_structured_tasks(message, parse_result.tasks)
+        return self._process_dm_free_request(message)
+
+    def _process_dm_structured_tasks(
+        self,
+        message: DiscordMessage,
+        tasks: tuple[ParsedTask, ...],
+    ) -> tuple[str, int]:
+        try:
+            card_urls: list[str] = []
+            created_count = 0
+            cargo_missing_tasks: list[ParsedTask] = []
+            for task in tasks:
+                if self._is_stale_task(task):
+                    continue
+                card, was_created = self._get_or_create_task_card(task)
+                if was_created:
+                    created_count += 1
+                card_id = str(card["id"])
+                card_urls.append(str(card["url"]))
+                self.trello.add_comment(
+                    card_id=card_id,
+                    text=self._build_trello_comment(task=task, message=message),
+                )
+                if task.cargo:
+                    self._set_cargo_in_card_description(card_id, task.cargo)
+                elif task.task_type is TaskType.ONBOARDING and was_created:
+                    cargo_missing_tasks.append(task)
+
+            if not card_urls:
+                return "skipped", 0
+
+            self.discord.add_reaction(
+                channel_id=message.channel_id,
+                message_id=message.id,
+                emoji=self.settings.discord_reaction_emoji,
+            )
+            for task in cargo_missing_tasks:
+                self._post_cargo_question(
+                    task=task,
+                    origin_channel_id=message.channel_id,
+                    origin_message_id=message.id,
+                )
+            if not cargo_missing_tasks:
+                self.discord.reply_to_message(
+                    channel_id=message.channel_id,
+                    message_id=message.id,
+                    content=self._build_discord_reply(card_urls),
+                )
+            return "created", created_count
+        except (ApiError, ValueError):
+            LOGGER.exception("Falha ao processar DM estruturada %s.", message.id)
+            return "error", 0
+
+    def _process_dm_free_request(self, message: DiscordMessage) -> tuple[str, int]:
+        try:
+            card = self.trello.create_card(
+                card_name=_build_dm_request_title(message.content),
+                due_iso=None,
+                desc=self._build_dm_request_desc(message),
+            )
+            card_id = str(card["id"])
+            card_url = str(card["url"])
+            self.trello.add_comment(
+                card_id=card_id,
+                text=self._build_dm_request_comment(message=message),
+            )
+            self.discord.add_reaction(
+                channel_id=message.channel_id,
+                message_id=message.id,
+                emoji=self.settings.discord_reaction_emoji,
+            )
+            self.discord.reply_to_message(
+                channel_id=message.channel_id,
+                message_id=message.id,
+                content=self.settings.discord_reply_template.format(card_url=card_url),
+            )
+            LOGGER.info("Card de solicitacao criado via DM %s: %s.", message.id, card_url)
+            return "created", 1
+        except (ApiError, ValueError):
+            LOGGER.exception("Falha ao criar card de solicitacao via DM %s.", message.id)
+            return "error", 0
+
+    def _build_dm_request_desc(self, message: DiscordMessage) -> str:
+        local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
+        lines = [
+            "**Solicitacao recebida por DM no Discord**",
+            "",
+            message.content.strip(),
+            "",
+            f"**Solicitante:** {message.author_name}",
+            f"**Enviado em:** {local_timestamp}",
+        ]
+        cited_links = _extract_urls_from_messages([message])
+        if cited_links:
+            lines.extend(["", "**Links citados:**"])
+            lines.extend(f"- {link}" for link in cited_links)
+        return "\n".join(lines)
+
+    def _build_dm_request_comment(self, *, message: DiscordMessage) -> str:
+        local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
+        return (
+            "Origem: DM no Discord\n"
+            f"Solicitado por {message.author_name} em {local_timestamp}"
+        )
+
     def _process_request_message(
         self,
         message: DiscordMessage,
@@ -1312,6 +1431,18 @@ def _extract_urls_from_messages(messages: list[DiscordMessage]) -> list[str]:
             seen.add(normalized)
             urls.append(url)
     return urls
+
+
+def _build_dm_request_title(text: str) -> str:
+    """Deriva um titulo de card a partir do texto livre de uma DM."""
+    cleaned = re.sub(r"<@!?\d+>|<@&\d+>", "", text)
+    for line in cleaned.splitlines():
+        candidate = re.sub(r"\s+", " ", line).strip(" -*\t")
+        if candidate:
+            if len(candidate) > 80:
+                candidate = candidate[:77].rstrip() + "..."
+            return f"[DM] {candidate}"
+    return "[DM] Solicitacao via DM"
 
 
 def _build_email_recipient_line(recipient: str, *, account_email: str | None = None) -> str:

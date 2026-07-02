@@ -931,6 +931,58 @@ class CargoReplyTests(unittest.TestCase):
         service.trello.update_card_description.assert_called_once_with(card_id="card-iza", desc="**Cargo:** Business Analyst")
 
 
+class DirectMessageTests(unittest.TestCase):
+    def test_dm_structured_creates_card_and_sets_cargo(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.discord = Mock()
+        service.trello.find_open_card_by_name.return_value = None
+        service.trello.list_open_task_cards.return_value = []
+        service.trello.create_card_from_template.return_value = {"id": "c1", "url": "https://trello/c1"}
+        service.trello.get_card.return_value = {"id": "c1", "desc": ""}
+
+        message = build_message(
+            channel_id="dm-1",
+            content="Onboarding 10/07\n• Ana Souza (Analista de Dados)",
+        )
+        outcome, created = service.process_direct_message(message)
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created, 1)
+        service.trello.create_card_from_template.assert_called_once()
+        service.trello.update_card_description.assert_called_once_with(
+            card_id="c1", desc="**Cargo:** Analista de Dados"
+        )
+        service.discord.add_reaction.assert_called_once()
+        service.discord.reply_to_message.assert_called_once()
+
+    def test_dm_free_text_creates_request_card(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.discord = Mock()
+        service.trello.create_card.return_value = {"id": "c9", "url": "https://trello/c9"}
+
+        message = build_message(channel_id="dm-1", content="Configurar acesso ao Postman pro time")
+        outcome, created = service.process_direct_message(message)
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created, 1)
+        kwargs = service.trello.create_card.call_args.kwargs
+        self.assertTrue(kwargs["card_name"].startswith("[DM] "))
+        self.assertIn("Solicitacao recebida por DM", kwargs["desc"])
+        service.trello.create_card_from_template.assert_not_called()
+        service.discord.reply_to_message.assert_called_once()
+
+    def test_dm_free_text_title_falls_back_when_empty(self) -> None:
+        from discord_trello_bot.service import _build_dm_request_title
+
+        self.assertEqual(_build_dm_request_title("   \n  "), "[DM] Solicitacao via DM")
+        self.assertEqual(
+            _build_dm_request_title("Liberar VPN para o Joao"),
+            "[DM] Liberar VPN para o Joao",
+        )
+
+
 class OpenAIRequestRefinerTests(unittest.TestCase):
     def _build_refiner_settings(self) -> Settings:
         return replace(build_settings(), openai_api_key="sk-test-key")
