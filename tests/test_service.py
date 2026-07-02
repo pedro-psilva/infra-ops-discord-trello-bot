@@ -983,6 +983,90 @@ class DirectMessageTests(unittest.TestCase):
         )
 
 
+class DMConversationTests(unittest.TestCase):
+    def _service_with_assistant(self):
+        from unittest.mock import Mock as _Mock
+
+        service = DiscordTrelloService(build_settings())
+        service.trello = _Mock()
+        service.discord = _Mock()
+        service.dm_assistant = _Mock()
+        return service
+
+    def test_dm_conversation_asks_when_incomplete(self) -> None:
+        from discord_trello_bot.dm_conversation import DMDecision
+
+        service = self._service_with_assistant()
+        service.dm_assistant.decide.return_value = DMDecision(
+            action="ask", reply="Qual o objetivo?", card=None
+        )
+        message = build_message(channel_id="dm-1", content="preciso de uma coisa")
+
+        outcome, created = service.process_direct_message(message, thread_messages=[message])
+
+        self.assertEqual(outcome, "ask")
+        self.assertEqual(created, 0)
+        service.trello.create_card.assert_not_called()
+        self.assertEqual(
+            service.discord.reply_to_message.call_args.kwargs["content"], "Qual o objetivo?"
+        )
+
+    def test_dm_conversation_creates_card_on_confirm(self) -> None:
+        from datetime import date as date_cls
+
+        from discord_trello_bot.dm_conversation import DMCardDraft, DMDecision
+
+        service = self._service_with_assistant()
+        service.trello.create_card.return_value = {
+            "id": "c1",
+            "url": "https://trello.com/c/AAA/1-vpn",
+        }
+        service.dm_assistant.decide.return_value = DMDecision(
+            action="create",
+            reply="Feito!",
+            card=DMCardDraft(
+                title="Liberar VPN para Joao",
+                description="Criar acesso VPN para o Joao do comercial",
+                due_date=date_cls(2026, 7, 10),
+            ),
+        )
+        message = build_message(channel_id="dm-1", content="pode criar")
+
+        outcome, created = service.process_direct_message(message, thread_messages=[message])
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created, 1)
+        kwargs = service.trello.create_card.call_args.kwargs
+        self.assertEqual(kwargs["card_name"], "[DM] Liberar VPN para Joao")
+        self.assertIsNotNone(kwargs["due_iso"])
+        self.assertIn("https://trello.com/c/AAA/1-vpn", service.discord.reply_to_message.call_args.kwargs["content"])
+
+    def test_current_request_thread_slices_after_created_card(self) -> None:
+        from discord_trello_bot.dm_conversation import _current_request_thread
+
+        msgs = [
+            build_message(message_id="m1", channel_id="dm-1", content="primeiro pedido"),
+            build_message(
+                message_id="m2",
+                channel_id="dm-1",
+                content="Card criado: https://trello.com/c/AAA/1-x",
+                author_is_bot=True,
+            ),
+            build_message(message_id="m3", channel_id="dm-1", content="pedido novo"),
+        ]
+        current = _current_request_thread(msgs)
+        self.assertEqual([m.content for m in current], ["pedido novo"])
+
+    def test_decision_create_without_title_falls_back_to_confirm(self) -> None:
+        from discord_trello_bot.dm_conversation import _decision_from_data
+
+        decision = _decision_from_data(
+            {"action": "create", "reply": "resumo", "card": {"title": "", "description": "x", "due_date": ""}}
+        )
+        self.assertEqual(decision.action, "confirm")
+        self.assertIsNone(decision.card)
+
+
 class OpenAIRequestRefinerTests(unittest.TestCase):
     def _build_refiner_settings(self) -> Settings:
         return replace(build_settings(), openai_api_key="sk-test-key")

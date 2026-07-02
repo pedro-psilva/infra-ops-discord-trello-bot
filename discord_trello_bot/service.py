@@ -10,6 +10,7 @@ UTC = _tz.utc
 
 from .config import ConfirmationMode, Settings
 from .discord_api import DiscordApiClient, build_discord_message_url
+from .dm_conversation import DMConversationAssistant, DMDecision
 from .gmail_api import GmailApiClient
 from .http import ApiError
 from .models import DiscordMessage, EmailMessage, ParsedTask, RequestedCard, RunSummary, TaskCard, TaskType
@@ -43,6 +44,11 @@ class DiscordTrelloService:
         self.request_parser = RequestParser(settings)
         self.request_refiner = (
             OpenAIRequestRefiner(settings)
+            if settings.openai_api_key
+            else None
+        )
+        self.dm_assistant = (
+            DMConversationAssistant(settings)
             if settings.openai_api_key
             else None
         )
@@ -232,13 +238,22 @@ class DiscordTrelloService:
             LOGGER.exception("Falha ao processar a mensagem %s.", message.id)
             return "error", 0
 
-    def process_direct_message(self, message: DiscordMessage) -> tuple[str, int]:
+    def process_direct_message(
+        self,
+        message: DiscordMessage,
+        *,
+        thread_messages: list[DiscordMessage] | None = None,
+    ) -> tuple[str, int]:
         """Processa uma DM recebida pelo bot.
 
-        Auto-detecta: se o texto for um onboarding/offboarding estruturado, cria
-        o(s) card(s) e trata cargo; caso contrario, abre um card de solicitacao a
-        partir do texto livre. Responde na propria DM. A autorizacao do remetente
-        e responsabilidade de quem chama (o listener).
+        Fluxo:
+        1. Se o texto ja for um onboarding/offboarding estruturado, cria o(s)
+           card(s) e trata cargo (auto-deteccao).
+        2. Caso contrario, conduz uma conversa guiada por IA: pergunta ate entender
+           a demanda, mostra um resumo e cria o card no Trello apos a confirmacao.
+        3. Sem IA configurada, faz o fallback de abrir um card direto do texto.
+
+        A autorizacao do remetente e responsabilidade de quem chama (o listener).
         """
         if not self._should_consider_message(message):
             return "skipped", 0
@@ -246,7 +261,98 @@ class DiscordTrelloService:
         parse_result = self.parser.parse_message(message)
         if parse_result.tasks:
             return self._process_dm_structured_tasks(message, parse_result.tasks)
+        if self.dm_assistant is not None:
+            return self._process_dm_conversation(
+                message=message,
+                thread_messages=thread_messages or [message],
+            )
         return self._process_dm_free_request(message)
+
+    def _process_dm_conversation(
+        self,
+        *,
+        message: DiscordMessage,
+        thread_messages: list[DiscordMessage],
+    ) -> tuple[str, int]:
+        assert self.dm_assistant is not None
+        try:
+            decision = self.dm_assistant.decide(thread_messages)
+        except (ApiError, ValueError):
+            LOGGER.exception(
+                "Falha na conversa de DM %s; usando fallback de card direto.", message.id
+            )
+            return self._process_dm_free_request(message)
+
+        if decision.action == "create" and decision.card is not None:
+            return self._create_dm_conversation_card(message=message, decision=decision)
+
+        if decision.reply:
+            try:
+                self.discord.reply_to_message(
+                    channel_id=message.channel_id,
+                    message_id=message.id,
+                    content=decision.reply,
+                )
+            except (ApiError, ValueError):
+                LOGGER.exception("Falha ao responder na conversa de DM %s.", message.id)
+                return "error", 0
+        return decision.action, 0
+
+    def _create_dm_conversation_card(
+        self,
+        *,
+        message: DiscordMessage,
+        decision: DMDecision,
+    ) -> tuple[str, int]:
+        card_draft = decision.card
+        assert card_draft is not None
+        try:
+            due_iso = self._build_due_iso(card_draft.due_date) if card_draft.due_date else None
+            card = self.trello.create_card(
+                card_name=f"[DM] {card_draft.title}",
+                due_iso=due_iso,
+                desc=self._build_dm_conversation_desc(message=message, card=card_draft),
+            )
+            card_id = str(card["id"])
+            card_url = str(card["url"])
+            self.trello.add_comment(
+                card_id=card_id,
+                text=self._build_dm_request_comment(message=message),
+            )
+            self.discord.add_reaction(
+                channel_id=message.channel_id,
+                message_id=message.id,
+                emoji=self.settings.discord_reaction_emoji,
+            )
+            confirmation = decision.reply.strip() if decision.reply else ""
+            reply_link = self.settings.discord_reply_template.format(card_url=card_url)
+            content = f"{confirmation}\n{reply_link}".strip() if confirmation else reply_link
+            self.discord.reply_to_message(
+                channel_id=message.channel_id,
+                message_id=message.id,
+                content=content,
+            )
+            LOGGER.info("Card criado via conversa de DM %s: %s.", message.id, card_url)
+            return "created", 1
+        except (ApiError, ValueError):
+            LOGGER.exception("Falha ao criar card na conversa de DM %s.", message.id)
+            return "error", 0
+
+    def _build_dm_conversation_desc(self, *, message: DiscordMessage, card) -> str:
+        local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
+        lines = [
+            "**Solicitacao entendida por DM (conversa com o bot)**",
+            "",
+            card.description or "(sem descricao)",
+        ]
+        if card.due_date:
+            lines.extend(["", f"**Prazo:** {card.due_date.strftime('%d/%m/%Y')}"])
+        lines.extend([
+            "",
+            f"**Solicitante:** {message.author_name}",
+            f"**Enviado em:** {local_timestamp}",
+        ])
+        return "\n".join(lines)
 
     def _process_dm_structured_tasks(
         self,

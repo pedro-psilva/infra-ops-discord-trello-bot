@@ -115,7 +115,7 @@ class InfraOpsDiscordClient(discord.Client):
         if message.id in cargo_reply_ids:
             return "cargo_reply", 0
 
-        return self.service.process_direct_message(message)
+        return self.service.process_direct_message(message, thread_messages=dm_messages)
 
     def _channel_modes(self, channel_id: str) -> set[str]:
         modes: set[str] = set()
