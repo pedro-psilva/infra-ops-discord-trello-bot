@@ -309,7 +309,7 @@ class DiscordTrelloService:
         try:
             due_iso = self._build_due_iso(card_draft.due_date) if card_draft.due_date else None
             card = self.trello.create_card(
-                card_name=f"[DM] {card_draft.title}",
+                card_name=card_draft.title,
                 due_iso=due_iso,
                 desc=self._build_dm_conversation_desc(message=message, card=card_draft),
             )
@@ -406,49 +406,35 @@ class DiscordTrelloService:
             return "error", 0
 
     def _process_dm_free_request(self, message: DiscordMessage) -> tuple[str, int]:
+        """Fallback conversacional quando a IA nao esta disponivel.
+
+        Regra: nunca criar card sem pedido claro e confirmacao. A criacao com
+        confirmacao acontece no fluxo de IA (`_process_dm_conversation`). Aqui,
+        sem IA (ou apos falha dela), o bot apenas responde e nunca abre card.
+        """
+        if not _dm_text_is_actionable(message.content):
+            reply = (
+                "Opa! Sou o assistente do Infra Ops. "
+                "Me conta o que voce precisa que eu te ajudo a abrir um card."
+            )
+            outcome = "ask"
+        else:
+            reply = (
+                "Recebi sua mensagem, mas nao consegui processar a demanda agora. "
+                "Pode reenviar em instantes? Assim que eu entender o pedido, "
+                "confirmo com voce antes de criar o card."
+            )
+            outcome = "error"
         try:
-            card = self.trello.create_card(
-                card_name=_build_dm_request_title(message.content),
-                due_iso=None,
-                desc=self._build_dm_request_desc(message),
-            )
-            card_id = str(card["id"])
-            card_url = str(card["url"])
-            self.trello.add_comment(
-                card_id=card_id,
-                text=self._build_dm_request_comment(message=message),
-            )
-            self.discord.add_reaction(
-                channel_id=message.channel_id,
-                message_id=message.id,
-                emoji=self.settings.discord_reaction_emoji,
-            )
             self.discord.reply_to_message(
                 channel_id=message.channel_id,
                 message_id=message.id,
-                content=self.settings.discord_reply_template.format(card_url=card_url),
+                content=reply,
             )
-            LOGGER.info("Card de solicitacao criado via DM %s: %s.", message.id, card_url)
-            return "created", 1
         except (ApiError, ValueError):
-            LOGGER.exception("Falha ao criar card de solicitacao via DM %s.", message.id)
+            LOGGER.exception("Falha ao responder DM no fallback %s.", message.id)
             return "error", 0
-
-    def _build_dm_request_desc(self, message: DiscordMessage) -> str:
-        local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
-        lines = [
-            "**Solicitacao recebida por DM no Discord**",
-            "",
-            message.content.strip(),
-            "",
-            f"**Solicitante:** {message.author_name}",
-            f"**Enviado em:** {local_timestamp}",
-        ]
-        cited_links = _extract_urls_from_messages([message])
-        if cited_links:
-            lines.extend(["", "**Links citados:**"])
-            lines.extend(f"- {link}" for link in cited_links)
-        return "\n".join(lines)
+        return outcome, 0
 
     def _build_dm_request_comment(self, *, message: DiscordMessage) -> str:
         local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
@@ -1539,16 +1525,27 @@ def _extract_urls_from_messages(messages: list[DiscordMessage]) -> list[str]:
     return urls
 
 
-def _build_dm_request_title(text: str) -> str:
-    """Deriva um titulo de card a partir do texto livre de uma DM."""
+_DM_GREETING_ONLY = {
+    "opa", "oi", "ola", "ola!", "eae", "eai", "e ai", "e ae", "hey", "hi", "hello",
+    "bom dia", "boa tarde", "boa noite", "tudo bem", "tudo bom", "beleza", "blz",
+    "teste", "test", "ping", "salve", "fala", "fala ai",
+}
+
+
+def _dm_text_is_actionable(text: str) -> bool:
+    """Indica se a DM tem conteudo suficiente para virar um card.
+
+    Filtra saudacoes/small-talk e mensagens curtas demais, evitando cards vazios
+    quando o fallback (sem IA ou apos falha da IA) recebe algo como "Opa".
+    """
     cleaned = re.sub(r"<@!?\d+>|<@&\d+>", "", text)
-    for line in cleaned.splitlines():
-        candidate = re.sub(r"\s+", " ", line).strip(" -*\t")
-        if candidate:
-            if len(candidate) > 80:
-                candidate = candidate[:77].rstrip() + "..."
-            return f"[DM] {candidate}"
-    return "[DM] Solicitacao via DM"
+    normalized = re.sub(r"[^\w\sà-ÿ]", "", cleaned, flags=re.IGNORECASE).strip().lower()
+    normalized = re.sub(r"\s+", " ", normalized)
+    if len(normalized) < 4:
+        return False
+    if normalized in _DM_GREETING_ONLY:
+        return False
+    return True
 
 
 def _build_email_recipient_line(recipient: str, *, account_email: str | None = None) -> str:

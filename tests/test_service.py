@@ -956,31 +956,39 @@ class DirectMessageTests(unittest.TestCase):
         service.discord.add_reaction.assert_called_once()
         service.discord.reply_to_message.assert_called_once()
 
-    def test_dm_free_text_creates_request_card(self) -> None:
+    def test_dm_free_text_does_not_create_card_without_confirmation(self) -> None:
+        # Sem IA (ou apos falha dela), o fallback nunca cria card: apenas responde.
         service = DiscordTrelloService(build_settings())
         service.trello = Mock()
         service.discord = Mock()
-        service.trello.create_card.return_value = {"id": "c9", "url": "https://trello/c9"}
 
         message = build_message(channel_id="dm-1", content="Configurar acesso ao Postman pro time")
         outcome, created = service.process_direct_message(message)
 
-        self.assertEqual(outcome, "created")
-        self.assertEqual(created, 1)
-        kwargs = service.trello.create_card.call_args.kwargs
-        self.assertTrue(kwargs["card_name"].startswith("[DM] "))
-        self.assertIn("Solicitacao recebida por DM", kwargs["desc"])
-        service.trello.create_card_from_template.assert_not_called()
+        self.assertEqual(created, 0)
+        service.trello.create_card.assert_not_called()
         service.discord.reply_to_message.assert_called_once()
 
-    def test_dm_free_text_title_falls_back_when_empty(self) -> None:
-        from discord_trello_bot.service import _build_dm_request_title
+    def test_dm_greeting_replies_without_creating_card(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.discord = Mock()
 
-        self.assertEqual(_build_dm_request_title("   \n  "), "[DM] Solicitacao via DM")
-        self.assertEqual(
-            _build_dm_request_title("Liberar VPN para o Joao"),
-            "[DM] Liberar VPN para o Joao",
-        )
+        message = build_message(channel_id="dm-1", content="Opa")
+        outcome, created = service.process_direct_message(message)
+
+        self.assertEqual(outcome, "ask")
+        self.assertEqual(created, 0)
+        service.trello.create_card.assert_not_called()
+        service.discord.reply_to_message.assert_called_once()
+
+    def test_dm_text_actionable_guard(self) -> None:
+        from discord_trello_bot.service import _dm_text_is_actionable
+
+        self.assertFalse(_dm_text_is_actionable("Opa"))
+        self.assertFalse(_dm_text_is_actionable("   \n  "))
+        self.assertFalse(_dm_text_is_actionable("bom dia"))
+        self.assertTrue(_dm_text_is_actionable("Liberar VPN para o Joao"))
 
 
 class DMConversationTests(unittest.TestCase):
@@ -1037,7 +1045,7 @@ class DMConversationTests(unittest.TestCase):
         self.assertEqual(outcome, "created")
         self.assertEqual(created, 1)
         kwargs = service.trello.create_card.call_args.kwargs
-        self.assertEqual(kwargs["card_name"], "[DM] Liberar VPN para Joao")
+        self.assertEqual(kwargs["card_name"], "Liberar VPN para Joao")
         self.assertIsNotNone(kwargs["due_iso"])
         self.assertIn("https://trello.com/c/AAA/1-vpn", service.discord.reply_to_message.call_args.kwargs["content"])
 
