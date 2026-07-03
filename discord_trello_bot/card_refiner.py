@@ -36,7 +36,9 @@ _SYSTEM_INSTRUCTIONS = (
     "Seja fiel ao contexto, nao invente fatos, nao atribua passos ou decisoes que nao estejam "
     "claros, e nao cite mensagens, timestamps ou autores no resultado final. "
     "Produza um titulo intuitivo, um resumo objetivo da demanda principal e detalhes importantes "
-    "que ajudem a execucao. Se algum detalhe adicional nao for util, devolva details vazio."
+    "que ajudem a execucao. Se algum detalhe adicional nao for util, devolva details vazio. "
+    "Escreva em português do Brasil correto, com acentuação e ortografia adequadas, mesmo que o "
+    "contexto venha sem acentos."
 )
 
 

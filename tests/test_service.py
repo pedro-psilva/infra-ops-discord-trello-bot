@@ -1049,6 +1049,55 @@ class DMConversationTests(unittest.TestCase):
         self.assertIsNotNone(kwargs["due_iso"])
         self.assertIn("https://trello.com/c/AAA/1-vpn", service.discord.reply_to_message.call_args.kwargs["content"])
 
+    def test_dm_conversation_applies_labels_and_due(self) -> None:
+        from datetime import date as date_cls
+
+        from discord_trello_bot.dm_conversation import DMCardDraft, DMDecision
+
+        service = self._service_with_assistant()
+        service.trello.list_board_labels.return_value = [{"id": "lid-urg", "name": "Urgente"}]
+        service.trello.label_ids_for_names.return_value = ["lid-urg"]
+        service.trello.create_card.return_value = {
+            "id": "c1",
+            "url": "https://trello.com/c/AAA/1-vpn",
+        }
+        service.dm_assistant.decide.return_value = DMDecision(
+            action="create",
+            reply="Feito!",
+            card=DMCardDraft(
+                title="Liberar VPN para Joao",
+                description="Criar acesso VPN",
+                due_date=date_cls(2026, 7, 10),
+                labels=("Urgente",),
+            ),
+        )
+        message = build_message(channel_id="dm-1", content="pode criar")
+
+        outcome, created = service.process_direct_message(message, thread_messages=[message])
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created, 1)
+        service.trello.label_ids_for_names.assert_called_once_with(("Urgente",))
+        kwargs = service.trello.create_card.call_args.kwargs
+        self.assertEqual(kwargs["label_ids"], ["lid-urg"])
+        self.assertIsNotNone(kwargs["due_iso"])
+
+    def test_dm_conversation_passes_today_and_labels_to_assistant(self) -> None:
+        from discord_trello_bot.dm_conversation import DMDecision
+
+        service = self._service_with_assistant()
+        service.trello.list_board_labels.return_value = [{"id": "lid", "name": "Urgente"}]
+        service.dm_assistant.decide.return_value = DMDecision(
+            action="ask", reply="Qual o objetivo?", card=None
+        )
+        message = build_message(channel_id="dm-1", content="preciso de uma coisa")
+
+        service.process_direct_message(message, thread_messages=[message])
+
+        kwargs = service.dm_assistant.decide.call_args.kwargs
+        self.assertEqual(kwargs["available_labels"], ["Urgente"])
+        self.assertEqual(kwargs["today"], message.timestamp.astimezone(service.settings.timezone).date())
+
     def test_current_request_thread_slices_after_created_card(self) -> None:
         from discord_trello_bot.dm_conversation import _current_request_thread
 

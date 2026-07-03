@@ -276,8 +276,13 @@ class DiscordTrelloService:
         thread_messages: list[DiscordMessage],
     ) -> tuple[str, int]:
         assert self.dm_assistant is not None
+        today = message.timestamp.astimezone(self.settings.timezone).date()
         try:
-            decision = self.dm_assistant.decide(thread_messages)
+            decision = self.dm_assistant.decide(
+                thread_messages,
+                today=today,
+                available_labels=self._available_label_names(),
+            )
         except (ApiError, ValueError):
             LOGGER.exception(
                 "Falha na conversa de DM %s; usando fallback de card direto.", message.id
@@ -309,10 +314,12 @@ class DiscordTrelloService:
         assert card_draft is not None
         try:
             due_iso = self._build_due_iso(card_draft.due_date) if card_draft.due_date else None
+            label_ids = self._resolve_label_ids(card_draft.labels)
             card = self.trello.create_card(
                 card_name=card_draft.title,
                 due_iso=due_iso,
                 desc=self._build_dm_conversation_desc(message=message, card=card_draft),
+                label_ids=label_ids,
             )
             card_id = str(card["id"])
             card_url = str(card["url"])
@@ -339,12 +346,28 @@ class DiscordTrelloService:
             LOGGER.exception("Falha ao criar card na conversa de DM %s.", message.id)
             return "error", 0
 
+    def _available_label_names(self) -> list[str]:
+        try:
+            return [label["name"] for label in self.trello.list_board_labels()]
+        except Exception:
+            LOGGER.warning("Nao foi possivel carregar as tags do Trello.")
+            return []
+
+    def _resolve_label_ids(self, labels: tuple[str, ...]) -> list[str]:
+        if not labels:
+            return []
+        try:
+            return self.trello.label_ids_for_names(labels)
+        except Exception:
+            LOGGER.warning("Nao foi possivel resolver as tags do card.")
+            return []
+
     def _build_dm_conversation_desc(self, *, message: DiscordMessage, card) -> str:
         local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
         lines = [
-            "**Solicitacao entendida por DM (conversa com o bot)**",
+            "**Solicitação entendida por DM (conversa com o bot)**",
             "",
-            card.description or "(sem descricao)",
+            card.description or "(sem descrição)",
         ]
         if card.due_date:
             lines.extend(["", f"**Prazo:** {card.due_date.strftime('%d/%m/%Y')}"])
@@ -416,14 +439,14 @@ class DiscordTrelloService:
         if not _dm_text_is_actionable(message.content):
             reply = (
                 "Opa! Sou o assistente do Infra Ops. "
-                "Me conta o que voce precisa que eu te ajudo a abrir um card."
+                "Me conta o que você precisa que eu te ajudo a abrir um card."
             )
             outcome = "ask"
         else:
             reply = (
-                "Recebi sua mensagem, mas nao consegui processar a demanda agora. "
+                "Recebi sua mensagem, mas não consegui processar a demanda agora. "
                 "Pode reenviar em instantes? Assim que eu entender o pedido, "
-                "confirmo com voce antes de criar o card."
+                "confirmo com você antes de criar o card."
             )
             outcome = "error"
         try:

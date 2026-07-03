@@ -24,6 +24,7 @@ class TrelloApiClient(JsonApiClient):
         self._resolved_onboarding_template_id: str | None = None
         self._resolved_offboarding_template_id: str | None = None
         self._target_list_cards_cache: list[dict] | None = None
+        self._board_labels_cache: list[dict] | None = None
 
     def create_card_from_template(
         self,
@@ -91,6 +92,7 @@ class TrelloApiClient(JsonApiClient):
         card_name: str,
         due_iso: str | None = None,
         desc: str | None = None,
+        label_ids: list[str] | None = None,
     ) -> dict:
         params: dict[str, object] = {
             "idList": self.resolve_target_list_id(),
@@ -100,9 +102,48 @@ class TrelloApiClient(JsonApiClient):
             params["due"] = due_iso
         if desc:
             params["desc"] = desc
+        if label_ids:
+            params["idLabels"] = ",".join(label_ids)
         card = self.request("POST", "cards", params=self._with_auth(params))
         self._remember_target_list_card(card)
         return card
+
+    def list_board_labels(self) -> list[dict]:
+        if self._board_labels_cache is None:
+            board_id = self._resolve_board_id()
+            labels = self.request(
+                "GET",
+                f"boards/{board_id}/labels",
+                params=self._with_auth({"fields": "id,name", "limit": "1000"}),
+            )
+            self._board_labels_cache = [
+                {"id": str(label["id"]), "name": str(label.get("name") or "").strip()}
+                for label in labels
+                if str(label.get("name") or "").strip()
+            ]
+        return self._board_labels_cache
+
+    def label_ids_for_names(self, names) -> list[str]:
+        wanted = [str(name).strip().casefold() for name in names if str(name).strip()]
+        if not wanted:
+            return []
+        by_name = {label["name"].casefold(): label["id"] for label in self.list_board_labels()}
+        ids: list[str] = []
+        for name in wanted:
+            label_id = by_name.get(name)
+            if label_id and label_id not in ids:
+                ids.append(label_id)
+        return ids
+
+    def _resolve_board_id(self) -> str:
+        if self.settings.trello_board_ref:
+            return _extract_board_ref(self.settings.trello_board_ref)
+        list_info = self.request(
+            "GET",
+            f"lists/{self.resolve_target_list_id()}",
+            params=self._with_auth({"fields": "idBoard"}),
+        )
+        return str(list_info["idBoard"])
 
     def _with_auth(self, params: dict[str, object]) -> dict[str, object]:
         return {

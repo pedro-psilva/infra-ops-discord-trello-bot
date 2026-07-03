@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from dataclasses import dataclass
@@ -65,15 +66,21 @@ _DEVELOPER_INSTRUCTIONS = (
     "sem nenhum pedido concreto, responda com action 'ask': cumprimente e pergunte no que pode ajudar. "
     "NUNCA crie card a partir de uma saudacao.\n"
     "- O minimo para criar um card e: um objetivo/titulo claro e uma descricao do que precisa ser feito. "
-    "Prazo e opcional (pode perguntar uma vez, mas nao bloqueie a criacao por causa dele).\n"
+    "Prazo e opcional: pergunte o prazo uma vez se o usuario nao informar, mas nao bloqueie a criacao por falta dele.\n"
+    "- Se o usuario informar um prazo, mesmo relativo (ex.: 'amanha', 'ate sexta', 'dia 10', 'em 3 dias'), "
+    "converta para o formato 'YYYY-MM-DD' e preencha card.due_date.\n"
+    "- Escolha em card.labels apenas as tags que claramente se aplicam ao pedido, sempre dentre as tags "
+    "disponiveis informadas. Se nenhuma se aplicar, use lista vazia.\n"
     "- Enquanto faltar o minimo, responda com action 'ask' e faca UMA pergunta objetiva por vez.\n"
     "- Quando tiver o minimo e o usuario ainda NAO tiver confirmado, responda com action 'confirm': "
-    "apresente um resumo curto (titulo, descricao e prazo se houver) e pergunte se pode criar o card.\n"
+    "apresente um resumo curto (titulo, descricao, prazo e tags quando houver) e pergunte se pode criar o card.\n"
     "- Responda com action 'create' SOMENTE quando o usuario confirmar explicitamente "
-    "(ex.: 'sim', 'pode criar', 'confirmo', 'isso'). Ai preencha card.title, card.description e "
-    "card.due_date (ou vazio).\n"
+    "(ex.: 'sim', 'pode criar', 'confirmo', 'isso'). Ai preencha card.title, card.description, "
+    "card.due_date e card.labels.\n"
     "- Se o usuario pedir alteracoes no resumo, volte para 'confirm' com o resumo ajustado.\n"
-    "- Fale sempre em portugues do Brasil, tom cordial e direto. Nao cite horarios nem IDs."
+    "- Escreva sempre em português do Brasil correto, com acentuação e ortografia adequadas "
+    "(por exemplo: 'você', 'não', 'está', 'até', 'atenção'), mesmo que o usuário escreva sem acentos. "
+    "Use tom cordial e direto e não cite horários nem IDs."
 )
 
 
@@ -82,6 +89,7 @@ class DMCardDraft:
     title: str
     description: str
     due_date: date | None
+    labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,11 +117,18 @@ class DMConversationAssistant:
             max_retries=settings.max_retries,
         )
 
-    def decide(self, thread_messages: list[DiscordMessage]) -> DMDecision:
+    def decide(
+        self,
+        thread_messages: list[DiscordMessage],
+        *,
+        today: date | None = None,
+        available_labels: list[str] | None = None,
+    ) -> DMDecision:
         conversation = _current_request_thread(thread_messages)
         if not conversation:
             raise ValueError("Conversa de DM vazia.")
 
+        label_names = list(available_labels or [])
         author_id = next(
             (m.author_id for m in reversed(conversation) if not m.author_is_bot),
             conversation[-1].author_id,
@@ -121,13 +136,13 @@ class DMConversationAssistant:
         payload = {
             "model": self.settings.anthropic_model,
             "max_tokens": 1024,
-            "system": _DEVELOPER_INSTRUCTIONS,
+            "system": _build_system(today, label_names),
             "metadata": {"user_id": sha256(author_id.encode("utf-8")).hexdigest()},
             "messages": _conversation_to_input(conversation),
             "output_config": {
                 "format": {
                     "type": "json_schema",
-                    "schema": DM_DECISION_SCHEMA,
+                    "schema": _build_decision_schema(label_names),
                 }
             },
         }
@@ -142,6 +157,33 @@ class DMConversationAssistant:
             raise ValueError("A Anthropic nao retornou JSON valido na conversa de DM.") from exc
 
         return _decision_from_data(data)
+
+
+def _build_system(today: date | None, label_names: list[str]) -> str:
+    parts = [_DEVELOPER_INSTRUCTIONS]
+    if today is not None:
+        parts.append(
+            f"Data de hoje: {today.strftime('%d/%m/%Y')}. Use esta data para converter "
+            "qualquer prazo relativo em uma data no formato YYYY-MM-DD."
+        )
+    if label_names:
+        parts.append("Tags disponiveis para o card: " + ", ".join(label_names) + ".")
+    return "\n".join(parts)
+
+
+def _build_decision_schema(label_names: list[str]) -> dict:
+    schema = copy.deepcopy(DM_DECISION_SCHEMA)
+    card = schema["properties"]["card"]
+    items: dict = {"type": "string"}
+    if label_names:
+        items = {"type": "string", "enum": label_names}
+    card["properties"]["labels"] = {
+        "type": "array",
+        "items": items,
+        "description": "Nomes das tags aplicaveis, escolhidos apenas entre as tags disponiveis. Vazio se nenhuma se aplica.",
+    }
+    card["required"] = [*card["required"], "labels"]
+    return schema
 
 
 def _conversation_to_input(conversation: list[DiscordMessage]) -> list[dict]:
@@ -195,10 +237,22 @@ def _decision_from_data(data: dict) -> DMDecision:
             title=title,
             description=description,
             due_date=_parse_iso_date(str(card_data.get("due_date") or "").strip()),
+            labels=_parse_labels(card_data.get("labels")),
         )
     if not reply and action != "create":
-        reply = "Pode me dar mais detalhes do que voce precisa?"
+        reply = "Pode me dar mais detalhes do que você precisa?"
     return DMDecision(action=action, reply=reply, card=card)
+
+
+def _parse_labels(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    names: list[str] = []
+    for item in value:
+        name = str(item).strip()
+        if name and name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 def _parse_iso_date(value: str) -> date | None:
