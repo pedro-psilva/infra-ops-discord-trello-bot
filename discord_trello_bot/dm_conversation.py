@@ -92,16 +92,17 @@ class DMDecision:
 
 
 class DMConversationAssistant:
-    """Conduz a conversa por DM ate entender a demanda e montar o card, via OpenAI."""
+    """Conduz a conversa por DM ate entender a demanda e montar o card, via Anthropic."""
 
     def __init__(self, settings: Settings) -> None:
-        if not settings.openai_api_key:
-            raise ValueError("OPENAI_API_KEY nao configurada.")
+        if not settings.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY nao configurada.")
         self.settings = settings
         self.client = JsonApiClient(
-            base_url=settings.openai_api_base_url,
+            base_url=settings.anthropic_api_base_url,
             default_headers={
-                "Authorization": f"Bearer {settings.openai_api_key}",
+                "x-api-key": settings.anthropic_api_key,
+                "anthropic-version": settings.anthropic_version,
                 "Content-Type": "application/json",
             },
             timeout_seconds=settings.request_timeout_seconds,
@@ -118,32 +119,27 @@ class DMConversationAssistant:
             conversation[-1].author_id,
         )
         payload = {
-            "model": self.settings.openai_model,
-            "reasoning": {"effort": self.settings.openai_reasoning_effort},
-            "store": False,
-            "safety_identifier": sha256(author_id.encode("utf-8")).hexdigest(),
-            "input": [
-                {"role": "developer", "content": _DEVELOPER_INSTRUCTIONS},
-                *_conversation_to_input(conversation),
-            ],
-            "text": {
+            "model": self.settings.anthropic_model,
+            "max_tokens": 1024,
+            "system": _DEVELOPER_INSTRUCTIONS,
+            "metadata": {"user_id": sha256(author_id.encode("utf-8")).hexdigest()},
+            "messages": _conversation_to_input(conversation),
+            "output_config": {
                 "format": {
                     "type": "json_schema",
-                    "name": "dm_card_decision",
-                    "strict": True,
                     "schema": DM_DECISION_SCHEMA,
                 }
             },
         }
 
-        response = self.client.request("POST", "/responses", json_body=payload)
+        response = self.client.request("POST", "/messages", json_body=payload)
         output_text = _extract_output_text(response)
         if not output_text:
-            raise ValueError("Resposta vazia da OpenAI na conversa de DM.")
+            raise ValueError("Resposta vazia da Anthropic na conversa de DM.")
         try:
             data = json.loads(output_text)
         except json.JSONDecodeError as exc:
-            raise ValueError("A OpenAI nao retornou JSON valido na conversa de DM.") from exc
+            raise ValueError("A Anthropic nao retornou JSON valido na conversa de DM.") from exc
 
         return _decision_from_data(data)
 
@@ -156,8 +152,9 @@ def _conversation_to_input(conversation: list[DiscordMessage]) -> list[dict]:
             continue
         role = "assistant" if message.author_is_bot else "user"
         items.append({"role": role, "content": content})
+    while items and items[0]["role"] != "user":
+        items.pop(0)
     if not items or items[-1]["role"] != "user":
-        # Garante que a ultima fala seja do usuario para a LLM responder.
         items.append({"role": "user", "content": conversation[-1].content.strip() or "(sem texto)"})
     return items
 
@@ -215,10 +212,7 @@ def _parse_iso_date(value: str) -> date | None:
 
 def _extract_output_text(response: dict) -> str:
     texts: list[str] = []
-    for item in response.get("output", []):
-        if item.get("type") != "message":
-            continue
-        for content in item.get("content", []):
-            if content.get("type") == "output_text" and content.get("text"):
-                texts.append(str(content["text"]))
+    for block in response.get("content", []):
+        if block.get("type") == "text" and block.get("text"):
+            texts.append(str(block["text"]))
     return "".join(texts).strip()

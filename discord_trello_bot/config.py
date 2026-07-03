@@ -39,10 +39,10 @@ class Settings:
     trello_api_base_url: str = "https://api.trello.com/1"
     request_timeout_seconds: float = 30.0
     max_retries: int = 5
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-5.5"
-    openai_reasoning_effort: str = "medium"
-    openai_api_base_url: str = "https://api.openai.com/v1"
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-opus-4-8"
+    anthropic_api_base_url: str = "https://api.anthropic.com/v1"
+    anthropic_version: str = "2023-06-01"
     gmail_user_email: str | None = None
     gmail_client_id: str | None = None
     gmail_client_secret: str | None = None
@@ -128,18 +128,6 @@ def _confirmation_mode_env() -> ConfirmationMode:
         ) from exc
 
 
-def _openai_reasoning_effort_env() -> str:
-    raw = os.getenv("OPENAI_REASONING_EFFORT", "medium").strip().lower() or "medium"
-    allowed = {"none", "minimal", "low", "medium", "high", "xhigh"}
-    if raw not in allowed:
-        allowed_values = ", ".join(sorted(allowed))
-        raise ValueError(
-            "OPENAI_REASONING_EFFORT invalido: "
-            f"{raw}. Valores aceitos: {allowed_values}."
-        )
-    return raw
-
-
 def _gmail_env() -> tuple[str | None, str | None, str | None, str | None]:
     user_email = _optional_env("GMAIL_USER_EMAIL")
     client_id = _optional_env("GMAIL_CLIENT_ID")
@@ -200,9 +188,8 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         max_messages_per_channel=_int_env("MAX_MESSAGES_PER_CHANNEL", 500),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
         discord_bot_user_id=_optional_env("DISCORD_BOT_USER_ID"),
-        openai_api_key=_optional_env("OPENAI_API_KEY"),
-        openai_model=os.getenv("OPENAI_MODEL", "gpt-5.5").strip() or "gpt-5.5",
-        openai_reasoning_effort=_openai_reasoning_effort_env(),
+        anthropic_api_key=_optional_env("ANTHROPIC_API_KEY"),
+        anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8").strip() or "claude-opus-4-8",
         gmail_user_email=gmail_user_email,
         gmail_client_id=gmail_client_id,
         gmail_client_secret=gmail_client_secret,

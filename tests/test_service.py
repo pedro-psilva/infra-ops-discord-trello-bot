@@ -1075,23 +1075,20 @@ class DMConversationTests(unittest.TestCase):
         self.assertIsNone(decision.card)
 
 
-class OpenAIRequestRefinerTests(unittest.TestCase):
+class CardRefinerTests(unittest.TestCase):
     def _build_refiner_settings(self) -> Settings:
-        return replace(build_settings(), openai_api_key="sk-test-key")
+        return replace(build_settings(), anthropic_api_key="sk-ant-test-key")
 
     def test_refine_returns_improved_card(self) -> None:
-        from discord_trello_bot.openai_request_refiner import OpenAIRequestRefiner
+        from discord_trello_bot.card_refiner import CardRefiner
         from datetime import date
         settings = self._build_refiner_settings()
-        refiner = OpenAIRequestRefiner(settings)
+        refiner = CardRefiner(settings)
         refiner.client = Mock()
         refiner.client.request.return_value = {
-            "output": [{
-                "type": "message",
-                "content": [{
-                    "type": "output_text",
-                    "text": '{"title": "Revisar contrato", "summary": "Revisar o contrato antes do prazo.", "details": "Validar com o juridico."}',
-                }],
+            "content": [{
+                "type": "text",
+                "text": '{"title": "Revisar contrato", "summary": "Revisar o contrato antes do prazo.", "details": "Validar com o juridico."}',
             }]
         }
         card = RequestedCard(
@@ -1107,34 +1104,34 @@ class OpenAIRequestRefinerTests(unittest.TestCase):
         self.assertIn("prazo", result.summary)
 
     def test_refine_raises_on_empty_response(self) -> None:
-        from discord_trello_bot.openai_request_refiner import OpenAIRequestRefiner
+        from discord_trello_bot.card_refiner import CardRefiner
         settings = self._build_refiner_settings()
-        refiner = OpenAIRequestRefiner(settings)
+        refiner = CardRefiner(settings)
         refiner.client = Mock()
-        refiner.client.request.return_value = {"output": []}
+        refiner.client.request.return_value = {"content": []}
         card = RequestedCard(title="x", summary="y", due_date=None, instruction="z", source_excerpt="", context_excerpt="")
         with self.assertRaises(ValueError):
             refiner.refine(requested_card=card, command_message=build_message(), context_messages=[])
 
     def test_refine_raises_on_invalid_json(self) -> None:
-        from discord_trello_bot.openai_request_refiner import OpenAIRequestRefiner
+        from discord_trello_bot.card_refiner import CardRefiner
         settings = self._build_refiner_settings()
-        refiner = OpenAIRequestRefiner(settings)
+        refiner = CardRefiner(settings)
         refiner.client = Mock()
         refiner.client.request.return_value = {
-            "output": [{"type": "message", "content": [{"type": "output_text", "text": "nao e json"}]}]
+            "content": [{"type": "text", "text": "nao e json"}]
         }
         card = RequestedCard(title="x", summary="y", due_date=None, instruction="z", source_excerpt="", context_excerpt="")
         with self.assertRaises(ValueError):
             refiner.refine(requested_card=card, command_message=build_message(), context_messages=[])
 
     def test_refine_raises_when_title_missing(self) -> None:
-        from discord_trello_bot.openai_request_refiner import OpenAIRequestRefiner
+        from discord_trello_bot.card_refiner import CardRefiner
         settings = self._build_refiner_settings()
-        refiner = OpenAIRequestRefiner(settings)
+        refiner = CardRefiner(settings)
         refiner.client = Mock()
         refiner.client.request.return_value = {
-            "output": [{"type": "message", "content": [{"type": "output_text", "text": '{"title": "", "summary": "algo", "details": ""}'}]}]
+            "content": [{"type": "text", "text": '{"title": "", "summary": "algo", "details": ""}'}]
         }
         card = RequestedCard(title="x", summary="y", due_date=None, instruction="z", source_excerpt="", context_excerpt="")
         with self.assertRaises(ValueError):

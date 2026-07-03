@@ -13,8 +13,8 @@ from .discord_api import DiscordApiClient, build_discord_message_url
 from .dm_conversation import DMConversationAssistant, DMDecision
 from .gmail_api import GmailApiClient
 from .http import ApiError
+from .card_refiner import CardRefiner
 from .models import DiscordMessage, EmailMessage, ParsedTask, RequestedCard, RunSummary, TaskCard, TaskType
-from .openai_request_refiner import OpenAIRequestRefiner
 from .parser import NOTE_KEYWORDS, TaskParser
 from .request_parser import RequestParser
 from .trello_api import TrelloApiClient
@@ -27,11 +27,12 @@ URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>\"]+", re.IGNORECASE)
 PAST_TASK_GRACE_DAYS = 3
 COMPACT_COMMENT_MAX_LEN = 500
 ONBOARDING_EMAIL_DETAILS_HEADING = "## Informacoes de onboarding recebidas por e-mail"
-CARGO_QUESTION_MARKER = "[cargo?]"
+CARGO_QUESTION_MARKER = "⁣⁣⁣"
+CARGO_QUESTION_LEGACY_MARKER = "[cargo?]"
 CARGO_QUESTION_TEMPLATE = (
     "Card criado para **{name}** em **{date}** \u2705\n"
-    "N\u00e3o identifiquei o cargo desta pessoa. Qual \u00e9 o cargo? {marker}\n"
-    "_(Responda a esta mensagem com apenas o cargo)_"
+    "N\u00e3o identifiquei o cargo desta pessoa. Qual \u00e9 o cargo?\n"
+    "_(Responda a esta mensagem com apenas o cargo)_{marker}"
 )
 
 
@@ -43,13 +44,13 @@ class DiscordTrelloService:
         self.parser = TaskParser(settings)
         self.request_parser = RequestParser(settings)
         self.request_refiner = (
-            OpenAIRequestRefiner(settings)
-            if settings.openai_api_key
+            CardRefiner(settings)
+            if settings.anthropic_api_key
             else None
         )
         self.dm_assistant = (
             DMConversationAssistant(settings)
-            if settings.openai_api_key
+            if settings.anthropic_api_key
             else None
         )
         self.gmail = (
@@ -543,13 +544,13 @@ class DiscordTrelloService:
             )
         except (ApiError, ValueError):
             LOGGER.exception(
-                "Falha ao refinar pedido com OpenAI na mensagem %s. Seguindo com heuristica local.",
+                "Falha ao refinar pedido com a LLM na mensagem %s. Seguindo com heuristica local.",
                 command_message.id,
             )
             return requested_card
 
         LOGGER.info(
-            "Pedido por mencao refinado com OpenAI na mensagem %s. titulo=%s",
+            "Pedido por mencao refinado com a LLM na mensagem %s. titulo=%s",
             command_message.id,
             refined.title,
         )
@@ -1228,7 +1229,7 @@ class DiscordTrelloService:
         for msg in messages:
             if not msg.author_is_bot:
                 continue
-            if CARGO_QUESTION_MARKER not in msg.content:
+            if CARGO_QUESTION_MARKER not in msg.content and CARGO_QUESTION_LEGACY_MARKER not in msg.content:
                 continue
             # Casa tanto a pergunta padrao ("Card criado para **Nome**")
             # quanto a de fallback ("Onboarding de **Nome** em ...").
