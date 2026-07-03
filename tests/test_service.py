@@ -147,7 +147,7 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.trello.create_card.assert_called_once()
         create_kwargs = service.trello.create_card.call_args.kwargs
         self.assertEqual(create_kwargs["card_name"], "Revisar contrato do fornecedor X com juridico")
-        self.assertIn("**Resumo da solicitacao:**", create_kwargs["desc"])
+        self.assertIn("**Resumo da solicitação:**", create_kwargs["desc"])
         self.assertIn("Revisar o contrato do fornecedor X com apoio do juridico antes da renovacao.", create_kwargs["desc"])
         self.assertIn("**Solicitante:** RH", create_kwargs["desc"])
         self.assertIn("**Detalhes importantes:**", create_kwargs["desc"])
@@ -540,18 +540,28 @@ class DiscordTrelloServiceTests(unittest.TestCase):
         service.trello.create_card_from_template.assert_not_called()
         service.gmail.mark_processed.assert_called_once_with("email-enc-forward")
 
-    def test_past_onboarding_is_stale_without_grace_period(self) -> None:
+    def test_past_onboarding_is_stale_beyond_grace_period(self) -> None:
+        from discord_trello_bot.service import PAST_TASK_GRACE_DAYS
+
         service = DiscordTrelloService(build_settings())
-        yesterday = datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date() - timedelta(days=1)
-        task = ParsedTask(
+        today = datetime.now(tz=ZoneInfo("America/Sao_Paulo")).date()
+        beyond_grace = ParsedTask(
             task_type=TaskType.ONBOARDING,
             employee_name="Ana Paula Souza",
-            effective_date=yesterday,
+            effective_date=today - timedelta(days=PAST_TASK_GRACE_DAYS + 1),
+            notes=(),
+            raw_excerpt="",
+        )
+        within_grace = ParsedTask(
+            task_type=TaskType.ONBOARDING,
+            employee_name="Ana Paula Souza",
+            effective_date=today - timedelta(days=1),
             notes=(),
             raw_excerpt="",
         )
 
-        self.assertTrue(service._is_stale_task(task))
+        self.assertTrue(service._is_stale_task(beyond_grace))
+        self.assertFalse(service._is_stale_task(within_grace))
 
     def test_backfill_processed_email_updates_onboarding_description_only(self) -> None:
         service = DiscordTrelloService(
@@ -843,7 +853,7 @@ class FindCompatibleTaskCardTests(unittest.TestCase):
         )
         result = service._find_compatible_task_card(task)
         self.assertIsNotNone(result)
-        self.assertEqual(result["id"], "card-1")
+        self.assertEqual(result.id, "card-1")
 
     def test_find_compatible_task_card_partial_name_same_date(self) -> None:
         from datetime import date as date_cls
@@ -997,6 +1007,7 @@ class DMConversationTests(unittest.TestCase):
 
         service = DiscordTrelloService(build_settings())
         service.trello = _Mock()
+        service.trello.find_open_card_by_name.return_value = None
         service.discord = _Mock()
         service.dm_assistant = _Mock()
         return service

@@ -7,6 +7,7 @@ from datetime import timedelta
 import discord
 
 from .config import Settings
+from .http import ApiError
 from .models import DiscordMessage, DiscordReaction, RunSummary
 from .service import DiscordTrelloService
 
@@ -26,7 +27,8 @@ class InfraOpsDiscordClient(discord.Client):
         self.service = service
         self._bot_user_id: str | None = None
         self._bot_role_ids: set[str] | None = None
-        self._dm_debounce_tasks: dict[str, asyncio.Task] = {}
+        self._dm_latest_message: dict[str, str] = {}
+        self._dm_locks: dict[str, asyncio.Lock] = {}
 
     async def on_ready(self) -> None:
         if self.user is not None:
@@ -48,8 +50,17 @@ class InfraOpsDiscordClient(discord.Client):
             return
 
         incoming_message = _message_from_discord_py(message)
-        if "request" in modes and not self._mentions_bot_or_role(incoming_message):
-            return
+        if "request" in modes:
+            try:
+                mentioned = self._mentions_bot_or_role(incoming_message)
+            except ApiError:
+                LOGGER.warning(
+                    "Nao foi possivel resolver bot/roles para a mensagem %s; ignorando.",
+                    message.id,
+                )
+                return
+            if not mentioned:
+                return
 
         try:
             outcome, created_count = await asyncio.to_thread(
@@ -79,32 +90,29 @@ class InfraOpsDiscordClient(discord.Client):
             return
 
         channel_id = str(message.channel.id)
-        pending = self._dm_debounce_tasks.get(channel_id)
-        if pending is not None and not pending.done():
-            pending.cancel()
-        self._dm_debounce_tasks[channel_id] = asyncio.create_task(
-            self._debounced_direct_message(message)
-        )
+        self._dm_latest_message[channel_id] = str(message.id)
+        asyncio.create_task(self._debounced_direct_message(message))
 
     async def _debounced_direct_message(self, message: discord.Message) -> None:
         channel_id = str(message.channel.id)
-        try:
-            await asyncio.sleep(self.settings.discord_dm_debounce_seconds)
-        except asyncio.CancelledError:
+        message_id = str(message.id)
+        await asyncio.sleep(self.settings.discord_dm_debounce_seconds)
+        if self._dm_latest_message.get(channel_id) != message_id:
             return
-        finally:
-            if self._dm_debounce_tasks.get(channel_id) is asyncio.current_task():
-                self._dm_debounce_tasks.pop(channel_id, None)
 
-        incoming_message = _message_from_discord_py(message)
-        try:
-            outcome, created_count = await asyncio.to_thread(
-                self._process_direct_message,
-                incoming_message,
-            )
-        except Exception:
-            LOGGER.exception("Falha ao processar DM %s.", message.id)
-            return
+        lock = self._dm_locks.setdefault(channel_id, asyncio.Lock())
+        async with lock:
+            if self._dm_latest_message.get(channel_id) != message_id:
+                return
+            incoming_message = _message_from_discord_py(message)
+            try:
+                outcome, created_count = await asyncio.to_thread(
+                    self._process_direct_message,
+                    incoming_message,
+                )
+            except Exception:
+                LOGGER.exception("Falha ao processar DM %s.", message.id)
+                return
 
         LOGGER.info(
             "DM %s processada. resultado=%s criados=%s",
@@ -166,14 +174,13 @@ class InfraOpsDiscordClient(discord.Client):
         # Respostas de cargo (humano respondendo a pergunta do bot) sao tratadas
         # antes do fluxo normal. No modo listener isso e essencial: sem isso, a
         # resposta com o cargo nunca era aplicada ao card.
-        if "structured" in modes:
-            cargo_reply_ids = self.service._process_cargo_reply_messages(
-                messages=channel_messages,
-                channel_id=message.channel_id,
-                summary=RunSummary(),
-            )
-            if message.id in cargo_reply_ids:
-                return "cargo_reply", 0
+        cargo_reply_ids = self.service._process_cargo_reply_messages(
+            messages=channel_messages,
+            channel_id=message.channel_id,
+            summary=RunSummary(),
+        )
+        if message.id in cargo_reply_ids:
+            return "cargo_reply", 0
 
         bot_reply_reference_ids = {
             item.referenced_message_id

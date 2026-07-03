@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
+from datetime import date, datetime
 from hashlib import sha256
 
 from .config import Settings
@@ -14,7 +16,7 @@ LOGGER = logging.getLogger(__name__)
 REQUESTED_CARD_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["title", "summary", "details"],
+    "required": ["title", "summary", "details", "due_date", "labels"],
     "properties": {
         "title": {
             "type": "string",
@@ -27,6 +29,15 @@ REQUESTED_CARD_SCHEMA = {
         "details": {
             "type": "string",
             "description": "Detalhes importantes em no maximo 2 frases curtas, sem citar mensagens ou autores.",
+        },
+        "due_date": {
+            "type": "string",
+            "description": "Prazo em 'YYYY-MM-DD' apenas se estiver explicito no pedido ou no contexto; caso contrario vazio.",
+        },
+        "labels": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Nomes das tags aplicaveis, escolhidos apenas entre as tags disponiveis. Vazio se nenhuma se aplica.",
         },
     },
 }
@@ -64,11 +75,14 @@ class CardRefiner:
         requested_card: RequestedCard,
         command_message: DiscordMessage,
         context_messages: list[DiscordMessage],
+        today: date | None = None,
+        available_labels: list[str] | None = None,
     ) -> RequestedCard:
+        label_names = list(available_labels or [])
         payload = {
             "model": self.settings.anthropic_model,
             "max_tokens": 1024,
-            "system": _SYSTEM_INSTRUCTIONS,
+            "system": _build_system(today, label_names),
             "metadata": {"user_id": _hash_author(command_message.author_id)},
             "messages": [
                 {
@@ -83,7 +97,7 @@ class CardRefiner:
             "output_config": {
                 "format": {
                     "type": "json_schema",
-                    "schema": REQUESTED_CARD_SCHEMA,
+                    "schema": _build_schema(label_names),
                 }
             },
         }
@@ -108,13 +122,17 @@ class CardRefiner:
         if details == summary or details in summary:
             details = ""
 
+        due_date = requested_card.due_date or _parse_iso_date(str(data.get("due_date") or "").strip())
+        labels = _parse_labels(data.get("labels"))
+
         return RequestedCard(
             title=title,
             summary=summary,
-            due_date=requested_card.due_date,
+            due_date=due_date,
             instruction=requested_card.instruction,
             source_excerpt=requested_card.source_excerpt,
             context_excerpt=details,
+            labels=labels,
         )
 
     def _build_prompt(
@@ -144,6 +162,49 @@ class CardRefiner:
             "Contexto selecionado do assunto:\n"
             f"{transcript}"
         )
+
+
+def _build_system(today: date | None, label_names: list[str]) -> str:
+    parts = [_SYSTEM_INSTRUCTIONS]
+    if today is not None:
+        parts.append(
+            f"Data de hoje: {today.strftime('%d/%m/%Y')}. Se o pedido ou o contexto trouxer um prazo "
+            "(inclusive relativo, como 'amanha' ou 'ate sexta'), converta para 'YYYY-MM-DD' em due_date. "
+            "Nao invente prazo que nao esteja no texto."
+        )
+    if label_names:
+        parts.append(
+            "Tags disponiveis para o card: " + ", ".join(label_names) + ". "
+            "Escolha em labels apenas as que claramente se aplicam; caso contrario, use lista vazia."
+        )
+    return "\n".join(parts)
+
+
+def _build_schema(label_names: list[str]) -> dict:
+    schema = copy.deepcopy(REQUESTED_CARD_SCHEMA)
+    if label_names:
+        schema["properties"]["labels"]["items"] = {"type": "string", "enum": label_names}
+    return schema
+
+
+def _parse_iso_date(value: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _parse_labels(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    names: list[str] = []
+    for item in value:
+        name = str(item).strip()
+        if name and name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 def _hash_author(author_id: str) -> str:

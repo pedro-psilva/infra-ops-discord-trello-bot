@@ -50,14 +50,31 @@ class JsonApiClient:
         body: str | None = None
 
         for attempt in range(1, self.max_retries + 1):
-            response = self.session.request(
-                method=method.upper(),
-                url=url,
-                params=params,
-                json=json_body,
-                headers=headers,
-                timeout=self.timeout_seconds,
-            )
+            try:
+                response = self.session.request(
+                    method=method.upper(),
+                    url=url,
+                    params=params,
+                    json=json_body,
+                    headers=headers,
+                    timeout=self.timeout_seconds,
+                )
+            except requests.RequestException as exc:
+                if attempt < self.max_retries:
+                    retry_after = min(2**attempt, 30)
+                    LOGGER.warning(
+                        "Falha de conexao em %s (%s). Nova tentativa em %ss.",
+                        url,
+                        type(exc).__name__,
+                        retry_after,
+                    )
+                    time.sleep(retry_after)
+                    continue
+                raise ApiError(
+                    status_code=0,
+                    message=f"Falha de conexao em {method.upper()} {url}",
+                    body=str(exc),
+                ) from exc
 
             if response.status_code == 429 and attempt < self.max_retries:
                 retry_after = self._retry_after_seconds(response)

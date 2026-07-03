@@ -29,11 +29,23 @@ COMPACT_COMMENT_MAX_LEN = 500
 ONBOARDING_EMAIL_DETAILS_HEADING = "## Informacoes de onboarding recebidas por e-mail"
 CARGO_QUESTION_MARKER = "⁣⁣⁣"
 CARGO_QUESTION_LEGACY_MARKER = "[cargo?]"
+CARGO_QUESTION_SIGNATURES = (
+    "cargo desta pessoa",
+    "cargo nao foi identificado",
+    "cargo não foi identificado",
+)
 CARGO_QUESTION_TEMPLATE = (
     "Card criado para **{name}** em **{date}** \u2705\n"
     "N\u00e3o identifiquei o cargo desta pessoa. Qual \u00e9 o cargo?\n"
     "_(Responda a esta mensagem com apenas o cargo)_{marker}"
 )
+
+
+def _is_cargo_question(content: str) -> bool:
+    if CARGO_QUESTION_MARKER in content or CARGO_QUESTION_LEGACY_MARKER in content:
+        return True
+    lowered = content.casefold()
+    return any(signature in lowered for signature in CARGO_QUESTION_SIGNATURES)
 
 
 class DiscordTrelloService:
@@ -93,13 +105,11 @@ class DiscordTrelloService:
             }
 
             # Processa respostas de cargo antes do loop principal
-            cargo_reply_ids: set[str] = set()
-            if "structured" in modes:
-                cargo_reply_ids = self._process_cargo_reply_messages(
-                    messages=messages,
-                    channel_id=channel_id,
-                    summary=summary,
-                )
+            cargo_reply_ids = self._process_cargo_reply_messages(
+                messages=messages,
+                channel_id=channel_id,
+                summary=summary,
+            )
 
             for message in messages:
                 if message.id in cargo_reply_ids:
@@ -313,38 +323,54 @@ class DiscordTrelloService:
         card_draft = decision.card
         assert card_draft is not None
         try:
-            due_iso = self._build_due_iso(card_draft.due_date) if card_draft.due_date else None
-            label_ids = self._resolve_label_ids(card_draft.labels)
-            card = self.trello.create_card(
-                card_name=card_draft.title,
-                due_iso=due_iso,
-                desc=self._build_dm_conversation_desc(message=message, card=card_draft),
-                label_ids=label_ids,
-            )
+            existing = self.trello.find_open_card_by_name(card_draft.title)
+            if existing is not None:
+                card = existing
+            else:
+                due_iso = self._build_due_iso(card_draft.due_date) if card_draft.due_date else None
+                label_ids = self._resolve_label_ids(card_draft.labels)
+                card = self.trello.create_card(
+                    card_name=card_draft.title,
+                    due_iso=due_iso,
+                    desc=self._build_dm_conversation_desc(message=message, card=card_draft),
+                    label_ids=label_ids,
+                )
             card_id = str(card["id"])
             card_url = str(card["url"])
-            self.trello.add_comment(
-                card_id=card_id,
-                text=self._build_dm_request_comment(message=message),
-            )
-            self.discord.add_reaction(
-                channel_id=message.channel_id,
-                message_id=message.id,
-                emoji=self.settings.discord_reaction_emoji,
-            )
-            confirmation = decision.reply.strip() if decision.reply else ""
-            reply_link = self.settings.discord_reply_template.format(card_url=card_url)
-            content = f"{confirmation}\n{reply_link}".strip() if confirmation else reply_link
-            self.discord.reply_to_message(
-                channel_id=message.channel_id,
-                message_id=message.id,
-                content=content,
-            )
-            LOGGER.info("Card criado via conversa de DM %s: %s.", message.id, card_url)
-            return "created", 1
         except (ApiError, ValueError):
             LOGGER.exception("Falha ao criar card na conversa de DM %s.", message.id)
             return "error", 0
+
+        confirmation = decision.reply.strip() if decision.reply else ""
+        reply_link = self.settings.discord_reply_template.format(card_url=card_url)
+        content = f"{confirmation}\n{reply_link}".strip() if confirmation else reply_link
+        self._safe_reply(message.channel_id, message.id, content)
+        self._safe_add_reaction(message.channel_id, message.id)
+        self._safe_add_comment(card_id, self._build_dm_request_comment(message=message))
+        LOGGER.info("Card criado via conversa de DM %s: %s.", message.id, card_url)
+        return "created", 1
+
+    def _safe_reply(self, channel_id: str, message_id: str | None, content: str) -> None:
+        try:
+            self.discord.reply_to_message(channel_id=channel_id, message_id=message_id, content=content)
+        except (ApiError, ValueError):
+            LOGGER.warning("Falha ao responder no Discord (canal %s).", channel_id)
+
+    def _safe_add_reaction(self, channel_id: str, message_id: str) -> None:
+        try:
+            self.discord.add_reaction(
+                channel_id=channel_id,
+                message_id=message_id,
+                emoji=self.settings.discord_reaction_emoji,
+            )
+        except (ApiError, ValueError):
+            LOGGER.warning("Falha ao reagir no Discord (canal %s).", channel_id)
+
+    def _safe_add_comment(self, card_id: str, text: str) -> None:
+        try:
+            self.trello.add_comment(card_id=card_id, text=text)
+        except (ApiError, ValueError):
+            LOGGER.warning("Falha ao comentar no card %s.", card_id)
 
     def _available_label_names(self) -> list[str]:
         try:
@@ -517,38 +543,31 @@ class DiscordTrelloService:
                     command_message=message,
                     context_messages=selected_context_messages,
                 ),
+                label_ids=self._resolve_label_ids(requested_card.labels),
             )
             card_id = str(card["id"])
             card_url = str(card["url"])
-            self.trello.add_comment(
-                card_id=card_id,
-                text=self._build_request_trello_comment(
-                    command_message=message,
-                    card_url=card_url,
-                ),
-            )
-            self.discord.add_reaction(
-                channel_id=message.channel_id,
-                message_id=message.id,
-                emoji=self.settings.discord_reaction_emoji,
-            )
-
-            if self.settings.discord_confirmation_mode in {ConfirmationMode.REPLY, ConfirmationMode.BOTH}:
-                self.discord.reply_to_message(
-                    channel_id=message.channel_id,
-                    message_id=message.id,
-                    content=self.settings.discord_reply_template.format(card_url=card_url),
-                )
-
-            LOGGER.info(
-                "Pedido por mencao processado na mensagem %s. Card criado: %s.",
-                message.id,
-                card_url,
-            )
-            return "created", 1
         except (ApiError, ValueError):
             LOGGER.exception("Falha ao processar pedido com mencao na mensagem %s.", message.id)
             return "error", 0
+
+        self._safe_add_reaction(message.channel_id, message.id)
+        if self.settings.discord_confirmation_mode in {ConfirmationMode.REPLY, ConfirmationMode.BOTH}:
+            self._safe_reply(
+                message.channel_id,
+                message.id,
+                self.settings.discord_reply_template.format(card_url=card_url),
+            )
+        self._safe_add_comment(
+            card_id,
+            self._build_request_trello_comment(command_message=message, card_url=card_url),
+        )
+        LOGGER.info(
+            "Pedido por mencao processado na mensagem %s. Card criado: %s.",
+            message.id,
+            card_url,
+        )
+        return "created", 1
 
     def _refine_requested_card(
         self,
@@ -559,11 +578,14 @@ class DiscordTrelloService:
     ) -> RequestedCard:
         if self.request_refiner is None:
             return requested_card
+        today = command_message.timestamp.astimezone(self.settings.timezone).date()
         try:
             refined = self.request_refiner.refine(
                 requested_card=requested_card,
                 command_message=command_message,
                 context_messages=selected_context_messages,
+                today=today,
+                available_labels=self._available_label_names(),
             )
         except (ApiError, ValueError):
             LOGGER.exception(
@@ -925,7 +947,7 @@ class DiscordTrelloService:
 
     def _is_stale_task(self, task: ParsedTask) -> bool:
         today = datetime.now(tz=self.settings.timezone).date()
-        oldest_allowed_date = today - timedelta(days=self.settings.lookback_days)
+        oldest_allowed_date = today - timedelta(days=PAST_TASK_GRACE_DAYS)
         return task.effective_date < oldest_allowed_date
 
     def _build_email_task_message(self, email_message: EmailMessage) -> DiscordMessage:
@@ -1103,7 +1125,7 @@ class DiscordTrelloService:
         local_timestamp = command_message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
         prazo = requested_card.due_date.strftime("%d/%m/%Y") if requested_card.due_date else "Sem prazo definido"
         lines = [
-            "**Resumo da solicitacao:**",
+            "**Resumo da solicitação:**",
             requested_card.summary,
             "",
             f"**Solicitante:** {command_message.author_name}",
@@ -1252,7 +1274,7 @@ class DiscordTrelloService:
         for msg in messages:
             if not msg.author_is_bot:
                 continue
-            if CARGO_QUESTION_MARKER not in msg.content and CARGO_QUESTION_LEGACY_MARKER not in msg.content:
+            if not _is_cargo_question(msg.content):
                 continue
             # Casa tanto a pergunta padrao ("Card criado para **Nome**")
             # quanto a de fallback ("Onboarding de **Nome** em ...").

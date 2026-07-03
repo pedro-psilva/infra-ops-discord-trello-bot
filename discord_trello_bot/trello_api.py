@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from datetime import date
 
 from .config import Settings
@@ -25,6 +26,7 @@ class TrelloApiClient(JsonApiClient):
         self._resolved_offboarding_template_id: str | None = None
         self._target_list_cards_cache: list[dict] | None = None
         self._board_labels_cache: list[dict] | None = None
+        self._cache_lock = threading.RLock()
 
     def create_card_from_template(
         self,
@@ -48,18 +50,20 @@ class TrelloApiClient(JsonApiClient):
         return card
 
     def find_open_card_by_name(self, card_name: str) -> dict | None:
-        self._load_target_list_cards()
-
         target_name = card_name.casefold()
-        for card in self._target_list_cards_cache or []:
-            if str(card.get("name", "")).casefold() == target_name:
-                return card
+        with self._cache_lock:
+            self._load_target_list_cards()
+            for card in self._target_list_cards_cache or []:
+                if str(card.get("name", "")).casefold() == target_name:
+                    return card
         return None
 
     def list_open_task_cards(self, task_type: TaskType | None = None) -> list[TaskCard]:
-        self._load_target_list_cards()
+        with self._cache_lock:
+            self._load_target_list_cards()
+            source = list(self._target_list_cards_cache or [])
         cards: list[TaskCard] = []
-        for card in self._target_list_cards_cache or []:
+        for card in source:
             task_card = _parse_task_card(card)
             if task_card is None:
                 continue
@@ -109,19 +113,20 @@ class TrelloApiClient(JsonApiClient):
         return card
 
     def list_board_labels(self) -> list[dict]:
-        if self._board_labels_cache is None:
-            board_id = self._resolve_board_id()
-            labels = self.request(
-                "GET",
-                f"boards/{board_id}/labels",
-                params=self._with_auth({"fields": "id,name", "limit": "1000"}),
-            )
-            self._board_labels_cache = [
-                {"id": str(label["id"]), "name": str(label.get("name") or "").strip()}
-                for label in labels
-                if str(label.get("name") or "").strip()
-            ]
-        return self._board_labels_cache
+        with self._cache_lock:
+            if self._board_labels_cache is None:
+                board_id = self._resolve_board_id()
+                labels = self.request(
+                    "GET",
+                    f"boards/{board_id}/labels",
+                    params=self._with_auth({"fields": "id,name", "limit": "1000"}),
+                )
+                self._board_labels_cache = [
+                    {"id": str(label["id"]), "name": str(label.get("name") or "").strip()}
+                    for label in labels
+                    if str(label.get("name") or "").strip()
+                ]
+            return self._board_labels_cache
 
     def label_ids_for_names(self, names) -> list[str]:
         wanted = [str(name).strip().casefold() for name in names if str(name).strip()]
@@ -153,18 +158,20 @@ class TrelloApiClient(JsonApiClient):
         }
 
     def _remember_target_list_card(self, card: dict) -> None:
-        if self._target_list_cards_cache is not None:
-            self._target_list_cards_cache.append(card)
+        with self._cache_lock:
+            if self._target_list_cards_cache is not None:
+                self._target_list_cards_cache.append(card)
 
     def _load_target_list_cards(self) -> None:
-        if self._target_list_cards_cache is not None:
-            return
-        target_list_id = self.resolve_target_list_id()
-        self._target_list_cards_cache = self.request(
-            "GET",
-            f"lists/{target_list_id}/cards",
-            params=self._with_auth({"fields": "id,name,url", "filter": "open"}),
-        )
+        with self._cache_lock:
+            if self._target_list_cards_cache is not None:
+                return
+            target_list_id = self.resolve_target_list_id()
+            self._target_list_cards_cache = self.request(
+                "GET",
+                f"lists/{target_list_id}/cards",
+                params=self._with_auth({"fields": "id,name,url", "filter": "open"}),
+            )
 
     def resolve_target_list_id(self) -> str:
         if self._resolved_target_list_id:

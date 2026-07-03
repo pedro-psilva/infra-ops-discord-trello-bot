@@ -130,6 +130,7 @@ class RequestedCard:
     instruction: str
     source_excerpt: str
     context_excerpt: str
+    labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

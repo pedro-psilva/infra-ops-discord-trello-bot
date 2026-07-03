@@ -15,14 +15,14 @@ NAME_CONNECTORS = {"da", "das", "de", "do", "dos", "e"}
 
 # Regex para _clean_name — compiladas uma vez
 _CLEAN_NAME_DATE_SUFFIX_RE = re.compile(
-    r"\s+[-–—]\s*(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}-\d{2}-\d{2})"
+    r"\s+[-–—]\s*(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}-\d{2}-\d{2})\b"
 )
 _CLEAN_NAME_LABEL_PREFIX_RE = re.compile(
     r"^(?:nome(?:\s+completo)?|colaborador(?:a)?|funcion[aá]ri[oa]|employee|pessoa|destinat[aá]rio)\s*[:\-]\s*",
     re.IGNORECASE,
 )
 _CLEAN_NAME_STOPWORD_SPLIT_RE = re.compile(
-    r"(?:data|dia|endere[cç]o|logradouro|rua|avenida|bairro|cidade|cep|telefone|celular|e-?mail|cargo|[áa]rea|gestor|l[ií]der|modalidade|obs(?:erva[cç][aã]o)?|observa[cç][aã]o|quer|precisa|vai|retirar|buscar|devolver|uber|perif[eé]ricos?)",
+    r"\b(?:data|dia|endere[cç]o|logradouro|rua|avenida|bairro|cidade|cep|telefone|celular|e-?mail|cargo|[áa]rea|gestor|l[ií]der|modalidade|obs(?:erva[cç][aã]o)?|observa[cç][aã]o|quer|precisa|vai|retirar|buscar|devolver|uber|perif[eé]ricos?)\b",
     re.IGNORECASE,
 )
 _CLEAN_NAME_WHITESPACE_RE = re.compile(r"\s{2,}")
