@@ -34,6 +34,7 @@ class Settings:
     max_messages_per_channel: int
     log_level: str
     discord_dm_allowed_user_ids: tuple[str, ...] = ()
+    discord_dm_debounce_seconds: float = 4.0
     discord_bot_user_id: str | None = None
     discord_api_base_url: str = "https://discord.com/api/v10"
     trello_api_base_url: str = "https://api.trello.com/1"
@@ -90,6 +91,19 @@ def _int_env(name: str, default: int) -> int:
         raise ValueError(f"A variavel de ambiente {name} precisa ser um inteiro.") from exc
     if value <= 0:
         raise ValueError(f"A variavel de ambiente {name} precisa ser maior que zero.")
+    return value
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"A variavel de ambiente {name} precisa ser um numero.") from exc
+    if value < 0:
+        raise ValueError(f"A variavel de ambiente {name} nao pode ser negativa.")
     return value
 
 
@@ -164,6 +178,7 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         discord_channel_ids=discord_channel_ids,
         discord_request_channel_ids=discord_request_channel_ids,
         discord_dm_allowed_user_ids=_csv_optional_env("DISCORD_DM_ALLOWED_USER_IDS"),
+        discord_dm_debounce_seconds=_float_env("DISCORD_DM_DEBOUNCE_SECONDS", 4.0),
         discord_confirmation_mode=_confirmation_mode_env(),
         discord_reaction_emoji=os.getenv("DISCORD_REACTION_EMOJI", "✅").strip() or "✅",
         discord_reply_template=os.getenv(

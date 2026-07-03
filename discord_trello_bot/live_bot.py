@@ -26,6 +26,7 @@ class InfraOpsDiscordClient(discord.Client):
         self.service = service
         self._bot_user_id: str | None = None
         self._bot_role_ids: set[str] | None = None
+        self._dm_debounce_tasks: dict[str, asyncio.Task] = {}
 
     async def on_ready(self) -> None:
         if self.user is not None:
@@ -76,6 +77,24 @@ class InfraOpsDiscordClient(discord.Client):
         if author_id not in allowed_user_ids:
             LOGGER.info("DM de usuario nao autorizado %s ignorada.", author_id)
             return
+
+        channel_id = str(message.channel.id)
+        pending = self._dm_debounce_tasks.get(channel_id)
+        if pending is not None and not pending.done():
+            pending.cancel()
+        self._dm_debounce_tasks[channel_id] = asyncio.create_task(
+            self._debounced_direct_message(message)
+        )
+
+    async def _debounced_direct_message(self, message: discord.Message) -> None:
+        channel_id = str(message.channel.id)
+        try:
+            await asyncio.sleep(self.settings.discord_dm_debounce_seconds)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._dm_debounce_tasks.get(channel_id) is asyncio.current_task():
+                self._dm_debounce_tasks.pop(channel_id, None)
 
         incoming_message = _message_from_discord_py(message)
         try:
