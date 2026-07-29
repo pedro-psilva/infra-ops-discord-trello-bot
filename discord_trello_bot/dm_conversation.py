@@ -38,7 +38,7 @@ DM_DECISION_SCHEMA = {
         "card": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["title", "description", "due_date"],
+            "required": ["title", "description", "due_date", "checklist"],
             "properties": {
                 "title": {
                     "type": "string",
@@ -51,6 +51,14 @@ DM_DECISION_SCHEMA = {
                 "due_date": {
                     "type": "string",
                     "description": "Prazo em 'YYYY-MM-DD' se o usuario informou; caso contrario vazio.",
+                },
+                "checklist": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Lista de sub-tarefas/etapas (itens de checklist) quando a demanda se divide "
+                        "naturalmente em passos concretos ditos pelo usuario. Vazio se nao houver."
+                    ),
                 },
             },
         },
@@ -71,6 +79,8 @@ _DEVELOPER_INSTRUCTIONS = (
     "converta para o formato 'YYYY-MM-DD' e preencha card.due_date.\n"
     "- Escolha em card.labels apenas as tags que claramente se aplicam ao pedido, sempre dentre as tags "
     "disponiveis informadas. Se nenhuma se aplicar, use lista vazia.\n"
+    "- Se a demanda se dividir naturalmente em passos concretos que o usuario mencionou, liste-os em "
+    "card.checklist como itens de checklist. Nao invente etapas: use lista vazia se o usuario nao citou passos.\n"
     "- Enquanto faltar o minimo, responda com action 'ask' e faca UMA pergunta objetiva por vez.\n"
     "- Quando tiver o minimo e o usuario ainda NAO tiver confirmado, responda com action 'confirm': "
     "apresente um resumo curto (titulo, descricao, prazo e tags quando houver) e pergunte se pode criar o card.\n"
@@ -99,6 +109,8 @@ _CHAT_INSTRUCTIONS = (
     "'YYYY-MM-DD' e preencha card.due_date.\n"
     "- Em card.labels escolha apenas as tags que claramente se aplicam, dentre as disponíveis. Se nenhuma "
     "se aplicar, use lista vazia.\n"
+    "- Se a demanda se dividir em passos concretos que a pessoa mencionou, liste-os em card.checklist como "
+    "itens de checklist. Não invente etapas: use lista vazia se não citarem passos.\n"
     "- Quando tiver o mínimo para o card e a pessoa ainda NÃO tiver confirmado, use action 'confirm': "
     "apresente um resumo curto (título, descrição, prazo e tags quando houver) e pergunte se pode criar.\n"
     "- Responda com action 'create' SOMENTE quando a pessoa confirmar explicitamente "
@@ -116,6 +128,7 @@ class DMCardDraft:
     description: str
     due_date: date | None
     labels: tuple[str, ...] = ()
+    checklist: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -269,6 +282,7 @@ def _decision_from_data(data: dict) -> DMDecision:
             description=description,
             due_date=_parse_iso_date(str(card_data.get("due_date") or "").strip()),
             labels=_parse_labels(card_data.get("labels")),
+            checklist=_parse_checklist(card_data.get("checklist")),
         )
     if not reply and action != "create":
         reply = "Pode me dar mais detalhes do que você precisa?"
@@ -284,6 +298,17 @@ def _parse_labels(value: object) -> tuple[str, ...]:
         if name and name not in names:
             names.append(name)
     return tuple(names)
+
+
+def _parse_checklist(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    items: list[str] = []
+    for item in value:
+        text = str(item).strip(" -*\t")
+        if text and text not in items:
+            items.append(text)
+    return tuple(items)
 
 
 def _parse_iso_date(value: str) -> date | None:

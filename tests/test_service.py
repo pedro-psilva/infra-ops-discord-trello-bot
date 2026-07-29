@@ -1134,6 +1134,53 @@ class DMConversationTests(unittest.TestCase):
         self.assertEqual(decision.action, "confirm")
         self.assertIsNone(decision.card)
 
+    def test_decision_parses_checklist_items(self) -> None:
+        from discord_trello_bot.dm_conversation import _decision_from_data
+
+        decision = _decision_from_data(
+            {
+                "action": "create",
+                "reply": "Feito!",
+                "card": {
+                    "title": "Configurar acesso",
+                    "description": "Preparar ambiente",
+                    "due_date": "",
+                    "checklist": ["Criar usuario", "- Liberar VPN", "Criar usuario"],
+                },
+            }
+        )
+        self.assertIsNotNone(decision.card)
+        self.assertEqual(decision.card.checklist, ("Criar usuario", "Liberar VPN"))
+
+    def test_dm_conversation_creates_checklist_on_new_card(self) -> None:
+        from datetime import date as date_cls
+
+        from discord_trello_bot.dm_conversation import DMCardDraft, DMDecision
+
+        service = self._service_with_assistant()
+        service.trello.create_card.return_value = {
+            "id": "c1",
+            "url": "https://trello.com/c/AAA/1-acesso",
+        }
+        service.dm_assistant.decide.return_value = DMDecision(
+            action="create",
+            reply="Feito!",
+            card=DMCardDraft(
+                title="Configurar acesso",
+                description="Preparar ambiente",
+                due_date=date_cls(2026, 7, 10),
+                checklist=("Criar usuario", "Liberar VPN"),
+            ),
+        )
+        message = build_message(channel_id="dm-1", content="pode criar")
+
+        outcome, created = service.process_direct_message(message, thread_messages=[message])
+
+        self.assertEqual(outcome, "created")
+        service.trello.add_checklist.assert_called_once()
+        kwargs = service.trello.add_checklist.call_args.kwargs
+        self.assertEqual(kwargs["items"], ["Criar usuario", "Liberar VPN"])
+
 
 class ChatConversationTests(unittest.TestCase):
     def _service_with_assistant(self):
@@ -1163,7 +1210,7 @@ class ChatConversationTests(unittest.TestCase):
             "Claro, posso ajudar com isso!",
         )
 
-    def test_chat_creates_card_on_confirm(self) -> None:
+    def test_chat_creates_card_and_checklist_on_confirm(self) -> None:
         from datetime import date as date_cls
 
         from discord_trello_bot.dm_conversation import DMCardDraft, DMDecision
@@ -1180,6 +1227,7 @@ class ChatConversationTests(unittest.TestCase):
                 title="Liberar VPN",
                 description="Acesso VPN para o time",
                 due_date=date_cls(2026, 7, 10),
+                checklist=("Solicitar acesso", "Testar conexao"),
             ),
         )
         message = build_message(channel_id="grupo-1", content="pode criar")
@@ -1192,6 +1240,7 @@ class ChatConversationTests(unittest.TestCase):
             "https://trello.com/c/AAA/1-vpn",
             service.discord.reply_to_message.call_args.kwargs["content"],
         )
+        service.trello.add_checklist.assert_called_once()
 
     def test_chat_without_assistant_replies_and_never_creates(self) -> None:
         service = DiscordTrelloService(build_settings())

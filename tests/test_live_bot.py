@@ -112,7 +112,7 @@ class LiveBotChatRoutingTests(unittest.TestCase):
             service.discord.reply_to_message.call_args.kwargs["content"], "Claro, posso ajudar!"
         )
 
-    def test_mention_creates_card(self) -> None:
+    def test_mention_creates_card_with_checklist(self) -> None:
         from datetime import date
 
         client, service = _build_client(("chat-1",))
@@ -127,6 +127,7 @@ class LiveBotChatRoutingTests(unittest.TestCase):
                 title="Configurar notebook do Joao",
                 description="Preparar maquina",
                 due_date=date(2026, 8, 1),
+                checklist=("Instalar office", "Configurar VPN", "Criar e-mail"),
             ),
         )
         message = _FakeMessage(
@@ -136,6 +137,11 @@ class LiveBotChatRoutingTests(unittest.TestCase):
         asyncio.run(client.on_message(message))
 
         service.trello.create_card.assert_called_once()
+        service.trello.add_checklist.assert_called_once()
+        checklist_kwargs = service.trello.add_checklist.call_args.kwargs
+        self.assertEqual(
+            checklist_kwargs["items"], ["Instalar office", "Configurar VPN", "Criar e-mail"]
+        )
         self.assertIn(
             "https://trello.com/c/AAA/1-nb",
             service.discord.reply_to_message.call_args.kwargs["content"],

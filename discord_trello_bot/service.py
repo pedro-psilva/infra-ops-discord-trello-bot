@@ -331,6 +331,7 @@ class DiscordTrelloService:
             existing = self.trello.find_open_card_by_name(card_draft.title)
             if existing is not None:
                 card = existing
+                was_created = False
             else:
                 due_iso = self._build_due_iso(card_draft.due_date) if card_draft.due_date else None
                 label_ids = self._resolve_label_ids(card_draft.labels)
@@ -340,12 +341,15 @@ class DiscordTrelloService:
                     desc=self._build_dm_conversation_desc(message=message, card=card_draft),
                     label_ids=label_ids,
                 )
+                was_created = True
             card_id = str(card["id"])
             card_url = str(card["url"])
         except (ApiError, ValueError):
             LOGGER.exception("Falha ao criar card na conversa de DM %s.", message.id)
             return "error", 0
 
+        if was_created and card_draft.checklist:
+            self._safe_add_checklist(card_id, card_draft.checklist)
         confirmation = decision.reply.strip() if decision.reply else ""
         reply_link = self.settings.discord_reply_template.format(card_url=card_url)
         content = f"{confirmation}\n{reply_link}".strip() if confirmation else reply_link
@@ -376,6 +380,15 @@ class DiscordTrelloService:
             self.trello.add_comment(card_id=card_id, text=text)
         except (ApiError, ValueError):
             LOGGER.warning("Falha ao comentar no card %s.", card_id)
+
+    def _safe_add_checklist(self, card_id: str, items: tuple[str, ...]) -> None:
+        cleaned = [item for item in items if item.strip()]
+        if not cleaned:
+            return
+        try:
+            self.trello.add_checklist(card_id=card_id, name="Checklist", items=cleaned)
+        except (ApiError, ValueError):
+            LOGGER.warning("Falha ao criar checklist no card %s.", card_id)
 
     def _available_label_names(self) -> list[str]:
         try:
@@ -555,6 +568,7 @@ class DiscordTrelloService:
             existing = self.trello.find_open_card_by_name(card_draft.title)
             if existing is not None:
                 card = existing
+                was_created = False
             else:
                 due_iso = self._build_due_iso(card_draft.due_date) if card_draft.due_date else None
                 label_ids = self._resolve_label_ids(card_draft.labels)
@@ -564,12 +578,15 @@ class DiscordTrelloService:
                     desc=self._build_chat_conversation_desc(message=message, card=card_draft),
                     label_ids=label_ids,
                 )
+                was_created = True
             card_id = str(card["id"])
             card_url = str(card["url"])
         except (ApiError, ValueError):
             LOGGER.exception("Falha ao criar card na conversa de grupo %s.", message.id)
             return "error", 0
 
+        if was_created and card_draft.checklist:
+            self._safe_add_checklist(card_id, card_draft.checklist)
         confirmation = decision.reply.strip() if decision.reply else ""
         reply_link = self.settings.discord_reply_template.format(card_url=card_url)
         content = f"{confirmation}\n{reply_link}".strip() if confirmation else reply_link

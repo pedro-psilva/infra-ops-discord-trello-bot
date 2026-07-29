@@ -112,6 +112,24 @@ class TrelloApiClient(JsonApiClient):
         self._remember_target_list_card(card)
         return card
 
+    def add_checklist(self, *, card_id: str, name: str, items: list[str]) -> dict:
+        checklist = self.request(
+            "POST",
+            f"cards/{card_id}/checklists",
+            params=self._with_auth({"name": name}),
+        )
+        checklist_id = str(checklist["id"])
+        for item in items:
+            text = str(item).strip()
+            if not text:
+                continue
+            self.request(
+                "POST",
+                f"checklists/{checklist_id}/checkItems",
+                params=self._with_auth({"name": text, "checked": "false"}),
+            )
+        return checklist
+
     def list_board_labels(self) -> list[dict]:
         with self._cache_lock:
             if self._board_labels_cache is None:
