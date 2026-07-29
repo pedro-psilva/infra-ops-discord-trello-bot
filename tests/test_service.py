@@ -1135,6 +1135,79 @@ class DMConversationTests(unittest.TestCase):
         self.assertIsNone(decision.card)
 
 
+class ChatConversationTests(unittest.TestCase):
+    def _service_with_assistant(self):
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.trello.find_open_card_by_name.return_value = None
+        service.discord = Mock()
+        service.chat_assistant = Mock()
+        return service
+
+    def test_chat_replies_normally_without_creating_card(self) -> None:
+        from discord_trello_bot.dm_conversation import DMDecision
+
+        service = self._service_with_assistant()
+        service.chat_assistant.decide.return_value = DMDecision(
+            action="ask", reply="Claro, posso ajudar com isso!", card=None
+        )
+        message = build_message(channel_id="grupo-1", content="<@bot> tudo bem?")
+
+        outcome, created = service.process_chat_message(message, thread_messages=[message])
+
+        self.assertEqual(outcome, "ask")
+        self.assertEqual(created, 0)
+        service.trello.create_card.assert_not_called()
+        self.assertEqual(
+            service.discord.reply_to_message.call_args.kwargs["content"],
+            "Claro, posso ajudar com isso!",
+        )
+
+    def test_chat_creates_card_on_confirm(self) -> None:
+        from datetime import date as date_cls
+
+        from discord_trello_bot.dm_conversation import DMCardDraft, DMDecision
+
+        service = self._service_with_assistant()
+        service.trello.create_card.return_value = {
+            "id": "c1",
+            "url": "https://trello.com/c/AAA/1-vpn",
+        }
+        service.chat_assistant.decide.return_value = DMDecision(
+            action="create",
+            reply="Feito!",
+            card=DMCardDraft(
+                title="Liberar VPN",
+                description="Acesso VPN para o time",
+                due_date=date_cls(2026, 7, 10),
+            ),
+        )
+        message = build_message(channel_id="grupo-1", content="pode criar")
+
+        outcome, created = service.process_chat_message(message, thread_messages=[message])
+
+        self.assertEqual(outcome, "created")
+        self.assertEqual(created, 1)
+        self.assertIn(
+            "https://trello.com/c/AAA/1-vpn",
+            service.discord.reply_to_message.call_args.kwargs["content"],
+        )
+
+    def test_chat_without_assistant_replies_and_never_creates(self) -> None:
+        service = DiscordTrelloService(build_settings())
+        service.trello = Mock()
+        service.discord = Mock()
+        service.chat_assistant = None
+        message = build_message(channel_id="grupo-1", content="<@bot> opa")
+
+        outcome, created = service.process_chat_message(message, thread_messages=[message])
+
+        self.assertEqual(outcome, "ask")
+        self.assertEqual(created, 0)
+        service.trello.create_card.assert_not_called()
+        service.discord.reply_to_message.assert_called_once()
+
+
 class CardRefinerTests(unittest.TestCase):
     def _build_refiner_settings(self) -> Settings:
         return replace(build_settings(), anthropic_api_key="sk-ant-test-key")

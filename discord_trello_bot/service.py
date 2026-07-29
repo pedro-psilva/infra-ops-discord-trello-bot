@@ -10,7 +10,7 @@ UTC = _tz.utc
 
 from .config import ConfirmationMode, Settings
 from .discord_api import DiscordApiClient, build_discord_message_url
-from .dm_conversation import DMConversationAssistant, DMDecision
+from .dm_conversation import DMConversationAssistant, DMDecision, build_chat_assistant
 from .gmail_api import GmailApiClient
 from .http import ApiError
 from .card_refiner import CardRefiner
@@ -62,6 +62,11 @@ class DiscordTrelloService:
         )
         self.dm_assistant = (
             DMConversationAssistant(settings)
+            if settings.anthropic_api_key
+            else None
+        )
+        self.chat_assistant = (
+            build_chat_assistant(settings)
             if settings.anthropic_api_key
             else None
         )
@@ -492,6 +497,120 @@ class DiscordTrelloService:
             "Origem: DM no Discord\n"
             f"Solicitado por {message.author_name} em {local_timestamp}"
         )
+
+    def process_chat_message(
+        self,
+        message: DiscordMessage,
+        *,
+        thread_messages: list[DiscordMessage] | None = None,
+    ) -> tuple[str, int]:
+        """Responde a uma mencao ao bot em um canal de grupo.
+
+        Diferente dos canais de requisicao, aqui o foco nao e apenas criar cards:
+        o bot conversa normalmente e so abre um card quando pedirem explicitamente
+        e confirmarem. Sem IA configurada, apenas responde de forma simples.
+        """
+        if not self._should_consider_message(message):
+            return "skipped", 0
+
+        conversation = thread_messages if thread_messages is not None else [message]
+        if self.chat_assistant is None:
+            return self._process_chat_fallback(message)
+        return self._process_chat_conversation(message=message, thread_messages=conversation)
+
+    def _process_chat_conversation(
+        self,
+        *,
+        message: DiscordMessage,
+        thread_messages: list[DiscordMessage],
+    ) -> tuple[str, int]:
+        assert self.chat_assistant is not None
+        today = message.timestamp.astimezone(self.settings.timezone).date()
+        try:
+            decision = self.chat_assistant.decide(
+                thread_messages,
+                today=today,
+                available_labels=self._available_label_names(),
+            )
+        except (ApiError, ValueError):
+            LOGGER.exception("Falha na conversa de grupo %s.", message.id)
+            return self._process_chat_fallback(message)
+
+        if decision.action == "create" and decision.card is not None:
+            return self._create_chat_conversation_card(message=message, decision=decision)
+
+        if decision.reply:
+            self._safe_reply(message.channel_id, message.id, decision.reply)
+        return decision.action, 0
+
+    def _create_chat_conversation_card(
+        self,
+        *,
+        message: DiscordMessage,
+        decision: DMDecision,
+    ) -> tuple[str, int]:
+        card_draft = decision.card
+        assert card_draft is not None
+        try:
+            existing = self.trello.find_open_card_by_name(card_draft.title)
+            if existing is not None:
+                card = existing
+            else:
+                due_iso = self._build_due_iso(card_draft.due_date) if card_draft.due_date else None
+                label_ids = self._resolve_label_ids(card_draft.labels)
+                card = self.trello.create_card(
+                    card_name=card_draft.title,
+                    due_iso=due_iso,
+                    desc=self._build_chat_conversation_desc(message=message, card=card_draft),
+                    label_ids=label_ids,
+                )
+            card_id = str(card["id"])
+            card_url = str(card["url"])
+        except (ApiError, ValueError):
+            LOGGER.exception("Falha ao criar card na conversa de grupo %s.", message.id)
+            return "error", 0
+
+        confirmation = decision.reply.strip() if decision.reply else ""
+        reply_link = self.settings.discord_reply_template.format(card_url=card_url)
+        content = f"{confirmation}\n{reply_link}".strip() if confirmation else reply_link
+        self._safe_reply(message.channel_id, message.id, content)
+        self._safe_add_reaction(message.channel_id, message.id)
+        self._safe_add_comment(card_id, self._build_chat_request_comment(message=message))
+        LOGGER.info("Card criado via conversa de grupo %s: %s.", message.id, card_url)
+        return "created", 1
+
+    def _process_chat_fallback(self, message: DiscordMessage) -> tuple[str, int]:
+        reply = (
+            "Opa! Sou o assistente do Infra Ops. "
+            "Me conta em que posso ajudar."
+        )
+        self._safe_reply(message.channel_id, message.id, reply)
+        return "ask", 0
+
+    def _build_chat_conversation_desc(self, *, message: DiscordMessage, card) -> str:
+        local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
+        lines = [
+            "**Solicitação entendida por conversa no Discord**",
+            "",
+            card.description or "(sem descrição)",
+        ]
+        if card.due_date:
+            lines.extend(["", f"**Prazo:** {card.due_date.strftime('%d/%m/%Y')}"])
+        lines.extend([
+            "",
+            f"**Solicitante:** {message.author_name}",
+            f"**Enviado em:** {local_timestamp}",
+        ])
+        return "\n".join(lines)
+
+    def _build_chat_request_comment(self, *, message: DiscordMessage) -> str:
+        local_timestamp = message.timestamp.astimezone(self.settings.timezone).strftime("%d/%m/%Y %H:%M")
+        message_url = build_discord_message_url(
+            guild_id=self.settings.discord_guild_id,
+            channel_id=message.channel_id,
+            message_id=message.id,
+        )
+        return f"Origem: {message_url}\nSolicitado por {message.author_name} em {local_timestamp}"
 
     def _process_request_message(
         self,

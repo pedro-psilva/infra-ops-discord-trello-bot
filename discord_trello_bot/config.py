@@ -33,6 +33,7 @@ class Settings:
     lookback_days: int
     max_messages_per_channel: int
     log_level: str
+    discord_chat_channel_ids: tuple[str, ...] = ()
     discord_dm_allowed_user_ids: tuple[str, ...] = ()
     discord_dm_debounce_seconds: float = 4.0
     discord_bot_user_id: str | None = None
@@ -161,9 +162,11 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
     gmail_user_email, gmail_client_id, gmail_client_secret, gmail_refresh_token = _gmail_env()
     discord_channel_ids = _csv_optional_env("DISCORD_CHANNEL_IDS")
     discord_request_channel_ids = _csv_optional_env("DISCORD_REQUEST_CHANNEL_IDS")
-    if not discord_channel_ids and not discord_request_channel_ids:
+    discord_chat_channel_ids = _csv_optional_env("DISCORD_CHAT_CHANNEL_IDS")
+    if not discord_channel_ids and not discord_request_channel_ids and not discord_chat_channel_ids:
         raise ValueError(
-            "Defina DISCORD_CHANNEL_IDS e/ou DISCORD_REQUEST_CHANNEL_IDS com ao menos um canal."
+            "Defina DISCORD_CHANNEL_IDS, DISCORD_REQUEST_CHANNEL_IDS e/ou "
+            "DISCORD_CHAT_CHANNEL_IDS com ao menos um canal."
         )
     trello_target_list_id = _optional_env("TRELLO_TARGET_LIST_ID")
     trello_target_list_name = _optional_env("TRELLO_TARGET_LIST_NAME")
@@ -177,6 +180,7 @@ def load_settings(*, lookback_days_override: int | None = None) -> Settings:
         discord_guild_id=_require_env("DISCORD_GUILD_ID"),
         discord_channel_ids=discord_channel_ids,
         discord_request_channel_ids=discord_request_channel_ids,
+        discord_chat_channel_ids=discord_chat_channel_ids,
         discord_dm_allowed_user_ids=_csv_optional_env("DISCORD_DM_ALLOWED_USER_IDS"),
         discord_dm_debounce_seconds=_float_env("DISCORD_DM_DEBOUNCE_SECONDS", 4.0),
         discord_confirmation_mode=_confirmation_mode_env(),

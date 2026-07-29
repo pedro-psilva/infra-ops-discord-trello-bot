@@ -83,6 +83,32 @@ _DEVELOPER_INSTRUCTIONS = (
     "Use tom cordial e direto e não cite horários nem IDs."
 )
 
+_CHAT_INSTRUCTIONS = (
+    "Você é o assistente do Infra Ops em um canal de grupo do Discord e só é acionado quando alguém "
+    "te menciona com @. Responda de forma natural e útil a qualquer mensagem: tire dúvidas, converse, "
+    "dê informações e ajude no que for pedido. Nem toda mensagem precisa virar um card do Trello.\n"
+    "Regras obrigatórias:\n"
+    "- NUNCA invente informações. Use somente o que foi dito na conversa.\n"
+    "- Use action 'ask' para qualquer resposta normal: responder uma pergunta, conversar ou pedir mais "
+    "detalhes. Coloque a resposta em 'reply' e deixe os campos do card vazios.\n"
+    "- Só trate a mensagem como pedido de card quando a pessoa claramente pedir para criar/abrir uma "
+    "tarefa, card ou demanda (ex.: 'abre um card', 'cria uma tarefa', 'preciso que registre isso').\n"
+    "- Para criar um card o mínimo é: um objetivo/título claro e uma descrição do que precisa ser feito. "
+    "Prazo é opcional: pergunte uma vez se não informarem, mas não bloqueie a criação por falta dele.\n"
+    "- Se informarem um prazo, mesmo relativo (ex.: 'amanhã', 'até sexta', 'em 3 dias'), converta para "
+    "'YYYY-MM-DD' e preencha card.due_date.\n"
+    "- Em card.labels escolha apenas as tags que claramente se aplicam, dentre as disponíveis. Se nenhuma "
+    "se aplicar, use lista vazia.\n"
+    "- Quando tiver o mínimo para o card e a pessoa ainda NÃO tiver confirmado, use action 'confirm': "
+    "apresente um resumo curto (título, descrição, prazo e tags quando houver) e pergunte se pode criar.\n"
+    "- Responda com action 'create' SOMENTE quando a pessoa confirmar explicitamente "
+    "(ex.: 'sim', 'pode criar', 'confirmo', 'isso'). Aí preencha card.title, card.description, "
+    "card.due_date e card.labels.\n"
+    "- Se pedirem alterações no resumo, volte para 'confirm' com o resumo ajustado.\n"
+    "- Escreva sempre em português do Brasil correto, com acentuação e ortografia adequadas, mesmo que "
+    "escrevam sem acentos. Use tom cordial e direto e não cite horários nem IDs."
+)
+
 
 @dataclass(frozen=True)
 class DMCardDraft:
@@ -102,10 +128,11 @@ class DMDecision:
 class DMConversationAssistant:
     """Conduz a conversa por DM ate entender a demanda e montar o card, via Anthropic."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, instructions: str | None = None) -> None:
         if not settings.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY nao configurada.")
         self.settings = settings
+        self._instructions = instructions or _DEVELOPER_INSTRUCTIONS
         self.client = JsonApiClient(
             base_url=settings.anthropic_api_base_url,
             default_headers={
@@ -136,7 +163,7 @@ class DMConversationAssistant:
         payload = {
             "model": self.settings.anthropic_model,
             "max_tokens": 1024,
-            "system": _build_system(today, label_names),
+            "system": _build_system(self._instructions, today, label_names),
             "metadata": {"user_id": sha256(author_id.encode("utf-8")).hexdigest()},
             "messages": _conversation_to_input(conversation),
             "output_config": {
@@ -159,8 +186,12 @@ class DMConversationAssistant:
         return _decision_from_data(data)
 
 
-def _build_system(today: date | None, label_names: list[str]) -> str:
-    parts = [_DEVELOPER_INSTRUCTIONS]
+def build_chat_assistant(settings: Settings) -> DMConversationAssistant:
+    return DMConversationAssistant(settings, instructions=_CHAT_INSTRUCTIONS)
+
+
+def _build_system(instructions: str, today: date | None, label_names: list[str]) -> str:
+    parts = [instructions]
     if today is not None:
         parts.append(
             f"Data de hoje: {today.strftime('%d/%m/%Y')}. Use esta data para converter "

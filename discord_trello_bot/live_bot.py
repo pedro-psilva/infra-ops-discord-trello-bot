@@ -39,17 +39,24 @@ class InfraOpsDiscordClient(discord.Client):
         if message.author.bot:
             return
 
-        # Mensagem direta (DM): sem servidor associado.
         if message.guild is None:
             await self._handle_direct_message(message)
             return
 
         channel_id = str(message.channel.id)
+        guild_id = str(message.guild.id)
+        incoming_message = _message_from_discord_py(message)
+
+        if self._is_chat_channel(channel_id, guild_id) and self._chat_mentions_bot(
+            message, incoming_message
+        ):
+            await self._handle_chat_message(message, incoming_message)
+            return
+
         modes = self._channel_modes(channel_id)
         if not modes:
             return
 
-        incoming_message = _message_from_discord_py(message)
         if "request" in modes:
             try:
                 mentioned = self._mentions_bot_or_role(incoming_message)
@@ -143,6 +150,55 @@ class InfraOpsDiscordClient(discord.Client):
             return "cargo_reply", 0
 
         return self.service.process_direct_message(message, thread_messages=dm_messages)
+
+    async def _handle_chat_message(
+        self,
+        message: discord.Message,
+        incoming_message: DiscordMessage,
+    ) -> None:
+        try:
+            outcome, created_count = await asyncio.to_thread(
+                self._process_chat_message,
+                incoming_message,
+            )
+        except Exception:
+            LOGGER.exception("Falha ao processar mensagem de grupo %s.", message.id)
+            return
+
+        LOGGER.info(
+            "Mensagem de grupo %s processada. resultado=%s criados=%s",
+            message.id,
+            outcome,
+            created_count,
+        )
+
+    def _process_chat_message(self, message: DiscordMessage) -> tuple[str, int]:
+        try:
+            reply_chain = self.service._load_reply_chain_messages(message)
+        except ApiError:
+            LOGGER.warning("Nao foi possivel carregar o historico da mensagem de grupo %s.", message.id)
+            reply_chain = []
+        thread_messages = _merge_current_message(reply_chain, message)
+        return self.service.process_chat_message(message, thread_messages=thread_messages)
+
+    def _is_chat_channel(self, channel_id: str, guild_id: str) -> bool:
+        chat_ids = self.settings.discord_chat_channel_ids
+        return channel_id in chat_ids or guild_id in chat_ids
+
+    def _chat_mentions_bot(
+        self,
+        message: discord.Message,
+        incoming_message: DiscordMessage,
+    ) -> bool:
+        bot_user_id = self._bot_user_id
+        if bot_user_id and incoming_message.mentions_user(bot_user_id):
+            return True
+        member = message.guild.me if message.guild is not None else None
+        if member is not None:
+            member_role_ids = {str(role.id) for role in member.roles}
+            if incoming_message.mentions_any_role(member_role_ids):
+                return True
+        return False
 
     def _channel_modes(self, channel_id: str) -> set[str]:
         modes: set[str] = set()
